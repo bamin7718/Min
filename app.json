@@ -17,7 +17,9 @@
         "monochromeImage": "./assets/android-icon-monochrome.png"
       },
       "predictiveBackGestureEnabled": false,
-      "softwareKeyboardLayoutMode": "pan"
+      "softwareKeyboardLayoutMode": "pan",
+      "package": "com.bamin7718.lop3studygame",
+      "versionCode": 1
     },
     "web": {
       "favicon": "./assets/favicon.png"

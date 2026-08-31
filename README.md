@@ -105,6 +105,45 @@ dụng — bấm để đồng hồ chạy mà không mở trò chơi nào.
 | `MAX_ACCUMULATED_MINUTES` | `120` | Trần thời gian tích luỹ |
 | `DEFAULT_PARENT_PIN` | `'1234'` | Mã PIN phụ huynh |
 
+## Build APK Android bằng GitHub Actions
+
+Workflow `.github/workflows/android-apk.yml` tự chạy mỗi lần push lên `main`, hoặc
+bấm tay ở tab **Actions → Build APK Android → Run workflow**.
+
+Lấy file APK: vào **Actions** → chọn lần chạy → mục **Artifacts** → tải
+`lop3-study-game-apk`. Giải nén rồi copy file `.apk` sang điện thoại/tablet, mở lên
+và cho phép *Cài đặt từ nguồn không xác định*.
+
+Quy trình trong CI: `npm ci` → `tsc --noEmit` → `expo prebuild --platform android`
+→ `gradlew assembleRelease` → kiểm tra chữ ký bằng `apksigner` → upload artifact.
+Thư mục `android/` **không** commit vào repo, mỗi lần build đều dựng lại từ
+`app.json` nên không bị lệch cấu hình. Chỉ build cho `arm64-v8a` và `armeabi-v7a`
+(máy thật) để nhẹ và nhanh hơn.
+
+### Chữ ký của APK — đọc trước khi phát hành
+
+Expo cấu hình sẵn buildType `release` ký bằng **`debug.keystore` đi kèm template**,
+nên APK ra là đã ký và cài được ngay mà không cần thêm secret nào. Nhưng:
+
+- **Dùng riêng trong nhà thì ổn** — cài lên máy của con hoặc gửi cho người thân.
+- **KHÔNG dùng để phát hành lên Google Play.** Play yêu cầu keystore riêng do bạn
+  giữ. Keystore debug là công khai, ai cũng có thể ký một APK giả mạo cùng package
+  `com.bamin7718.lop3studygame`.
+
+Muốn keystore riêng: tạo bằng
+`keytool -genkeypair -v -keystore my.keystore -alias upload -keyalg RSA -keysize 2048 -validity 10000`,
+rồi sửa `signingConfigs.release` trong `android/app/build.gradle` do prebuild sinh ra
+(cách gọn nhất là viết một Expo config plugin để tự áp dụng sau mỗi lần prebuild).
+
+### Cách khác: EAS Build
+
+`eas-cli` đã được cài trên máy dev. EAS quản lý keystore giúp bạn nên phù hợp hơn nếu
+định lên Play Store — đổi lại cần tài khoản Expo:
+
+```bash
+eas login && eas init && eas build -p android --profile preview
+```
+
 ## Lưu ý về mức độ "khoá" thật
 
 Việc khoá ở đây là khoá **trong ứng dụng**: hết giờ thì màn hình Góc Game hiển thị
