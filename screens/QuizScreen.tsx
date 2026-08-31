@@ -14,11 +14,20 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import {
+  MATH_WEEKS,
+  TOTAL_WEEKS,
+  getWeek,
+  getWeekQuestions,
+  weekBonusMinutes,
+  weekStatus,
+} from '../constants/mathCurriculum';
+import {
   POINTS_PER_CORRECT,
   QUESTIONS_PER_QUIZ,
   SUBJECTS,
   getQuestionsBySubject,
   pickQuizQuestions,
+  shuffleAllOptions,
 } from '../constants/mockData';
 import {
   CONTENT_MAX_WIDTH,
@@ -27,8 +36,18 @@ import {
   radius,
   spacing,
 } from '../constants/theme';
-import { usePlaytime, type RewardOutcome } from '../context/PlaytimeContext';
-import type { RootTabParamList, Subject, SubjectInfo } from '../types';
+import {
+  usePlaytime,
+  type RewardOutcome,
+  type WeekOutcome,
+} from '../context/PlaytimeContext';
+import type {
+  RootTabParamList,
+  Subject,
+  SubjectInfo,
+  WeekStatus,
+  WeekTopic,
+} from '../types';
 
 const OPTION_LABELS = ['A', 'B', 'C', 'D'] as const;
 
@@ -53,10 +72,20 @@ export default function QuizScreen() {
   const { width } = useWindowDimensions();
   const isTablet = width >= TABLET_BREAKPOINT;
 
-  const { totalPoints, availableMinutes, masteredQuestionIds, submitAnswer } =
-    usePlaytime();
+  const {
+    totalPoints,
+    availableMinutes,
+    masteredQuestionIds,
+    highestCompletedWeek,
+    submitAnswer,
+    completeWeek,
+  } = usePlaytime();
 
   const [selectedSubject, setSelectedSubject] = useState<Subject | null>(null);
+  /** Tuần đang làm bài — chỉ dùng cho môn Toán */
+  const [selectedWeek, setSelectedWeek] = useState<number | null>(null);
+  /** Kết quả vượt tuần, hiện ở màn tổng kết */
+  const [weekOutcome, setWeekOutcome] = useState<WeekOutcome | null>(null);
   const [questionIndex, setQuestionIndex] = useState(0);
   const [selectedAnswer, setSelectedAnswer] = useState<number | null>(null);
   const [outcome, setOutcome] = useState<RewardOutcome | null>(null);
@@ -72,13 +101,24 @@ export default function QuizScreen() {
   const masteredRef = useRef(masteredQuestionIds);
   masteredRef.current = masteredQuestionIds;
 
-  const questions = useMemo(
-    () =>
-      selectedSubject ? pickQuizQuestions(selectedSubject, masteredRef.current) : [],
+  const questions = useMemo(() => {
+    if (!selectedSubject) return [];
+
+    // Toán đi theo lộ trình tuần; hai môn còn lại rút ngẫu nhiên từ bộ đề.
+    const picked =
+      selectedSubject === 'Toán'
+        ? selectedWeek === null
+          ? []
+          : getWeekQuestions(selectedWeek)
+        : pickQuizQuestions(selectedSubject, masteredRef.current);
+
+    // Trộn thứ tự lựa chọn để học sinh không đoán được theo vị trí đáp án
+    return shuffleAllOptions(picked);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [selectedSubject, sessionId],
-  );
+  }, [selectedSubject, selectedWeek, sessionId]);
+
   const currentQuestion = questions[questionIndex];
+  const activeWeek = selectedWeek === null ? undefined : getWeek(selectedWeek);
 
   // Hiệu ứng nảy nhẹ cho khung phản hồi đúng/sai
   const feedbackAnim = useRef(new Animated.Value(0)).current;
@@ -99,12 +139,24 @@ export default function QuizScreen() {
     setOutcome(null);
     setSummary(EMPTY_SUMMARY);
     setIsFinished(false);
+    setWeekOutcome(null);
   }, []);
 
   const handleChooseSubject = useCallback(
     (subject: Subject) => {
       resetSession();
       setSelectedSubject(subject);
+      // Toán: vào màn chọn tuần trước, chưa vào bài ngay
+      setSelectedWeek(null);
+      setSessionId((prev) => prev + 1);
+    },
+    [resetSession],
+  );
+
+  const handleChooseWeek = useCallback(
+    (weekNumber: number) => {
+      resetSession();
+      setSelectedWeek(weekNumber);
       setSessionId((prev) => prev + 1);
     },
     [resetSession],
@@ -113,6 +165,13 @@ export default function QuizScreen() {
   const handleBackToSubjects = useCallback(() => {
     resetSession();
     setSelectedSubject(null);
+    setSelectedWeek(null);
+  }, [resetSession]);
+
+  /** Từ màn làm bài Toán quay về danh sách tuần */
+  const handleBackToWeeks = useCallback(() => {
+    resetSession();
+    setSelectedWeek(null);
   }, [resetSession]);
 
   const handleSelectAnswer = useCallback(
@@ -136,13 +195,17 @@ export default function QuizScreen() {
 
   const handleNextQuestion = useCallback(() => {
     if (questionIndex + 1 >= questions.length) {
+      // Làm xong một tuần Toán thì ghi nhận để mở tuần kế tiếp
+      if (activeWeek) {
+        setWeekOutcome(completeWeek(activeWeek, summary.correctCount));
+      }
       setIsFinished(true);
       return;
     }
     setQuestionIndex((prev) => prev + 1);
     setSelectedAnswer(null);
     setOutcome(null);
-  }, [questionIndex, questions.length]);
+  }, [activeWeek, completeWeek, questionIndex, questions.length, summary.correctCount]);
 
   const contentStyle = [
     styles.content,
@@ -166,23 +229,43 @@ export default function QuizScreen() {
           <SubjectPicker
             isTablet={isTablet}
             masteredQuestionIds={masteredQuestionIds}
+            highestCompletedWeek={highestCompletedWeek}
             onChoose={handleChooseSubject}
+          />
+        ) : selectedSubject === 'Toán' && selectedWeek === null ? (
+          <WeekPicker
+            isTablet={isTablet}
+            highestCompletedWeek={highestCompletedWeek}
+            onChooseWeek={handleChooseWeek}
+            onBack={handleBackToSubjects}
           />
         ) : isFinished ? (
           <SummaryCard
             subject={selectedSubject}
+            week={activeWeek}
+            weekOutcome={weekOutcome}
             summary={summary}
-            onRetry={() => handleChooseSubject(selectedSubject)}
-            onBack={handleBackToSubjects}
+            onRetry={() =>
+              activeWeek
+                ? handleChooseWeek(activeWeek.weekNumber)
+                : handleChooseSubject(selectedSubject)
+            }
+            onBack={activeWeek ? handleBackToWeeks : handleBackToSubjects}
+            onNextWeek={
+              weekOutcome?.unlockedWeek
+                ? () => handleChooseWeek(weekOutcome.unlockedWeek as number)
+                : undefined
+            }
             onGoToGame={() => navigation.navigate('GocGame')}
           />
         ) : currentQuestion ? (
           <View style={styles.quizWrapper}>
             <QuizProgress
               subject={selectedSubject}
+              week={activeWeek}
               current={questionIndex + 1}
               total={questions.length}
-              onBack={handleBackToSubjects}
+              onBack={activeWeek ? handleBackToWeeks : handleBackToSubjects}
             />
 
             <View style={styles.questionCard}>
@@ -269,17 +352,20 @@ function HeaderBar({
 function SubjectPicker({
   isTablet,
   masteredQuestionIds,
+  highestCompletedWeek,
   onChoose,
 }: {
   isTablet: boolean;
   masteredQuestionIds: string[];
+  highestCompletedWeek: number;
   onChoose: (subject: Subject) => void;
 }) {
   return (
     <View>
       <Text style={styles.sectionTitle}>Chọn môn em muốn học hôm nay</Text>
       <Text style={styles.sectionSubtitle}>
-        Mỗi lượt {QUESTIONS_PER_QUIZ} câu rút ngẫu nhiên. Trả lời đúng được +
+        Môn Toán đi theo lộ trình {TOTAL_WEEKS} tuần; Tiếng Việt và Tiếng Anh mỗi lượt{' '}
+        {QUESTIONS_PER_QUIZ} câu rút ngẫu nhiên. Trả lời đúng được +
         {POINTS_PER_CORRECT} điểm và cộng thêm phút chơi game nhé!
       </Text>
 
@@ -290,6 +376,7 @@ function SubjectPicker({
             subject={subject}
             isTablet={isTablet}
             masteredQuestionIds={masteredQuestionIds}
+            highestCompletedWeek={highestCompletedWeek}
             onPress={() => onChoose(subject.key)}
           />
         ))}
@@ -302,18 +389,23 @@ function SubjectCard({
   subject,
   isTablet,
   masteredQuestionIds,
+  highestCompletedWeek,
   onPress,
 }: {
   subject: SubjectInfo;
   isTablet: boolean;
   masteredQuestionIds: string[];
+  highestCompletedWeek: number;
   onPress: () => void;
 }) {
+  // Toán tính tiến độ theo tuần của lộ trình, hai môn còn lại theo số câu
+  const isMath = subject.key === 'Toán';
   const questions = getQuestionsBySubject(subject.key);
-  const masteredCount = questions.filter((question) =>
-    masteredQuestionIds.includes(question.id),
-  ).length;
-  const isCompleted = masteredCount === questions.length;
+  const doneCount = isMath
+    ? highestCompletedWeek
+    : questions.filter((question) => masteredQuestionIds.includes(question.id)).length;
+  const totalCount = isMath ? TOTAL_WEEKS : questions.length;
+  const isCompleted = totalCount > 0 && doneCount === totalCount;
 
   return (
     <Pressable
@@ -334,8 +426,9 @@ function SubjectCard({
         </Text>
         <Text style={styles.subjectDescription}>{subject.description}</Text>
         <Text style={styles.subjectMeta}>
-          Mỗi lượt {QUESTIONS_PER_QUIZ} câu · đã chinh phục {masteredCount}/
-          {questions.length} câu
+          {isMath
+            ? `Lộ trình ${TOTAL_WEEKS} tuần · đã qua ${doneCount}/${TOTAL_WEEKS} tuần`
+            : `Mỗi lượt ${QUESTIONS_PER_QUIZ} câu · đã chinh phục ${doneCount}/${totalCount} câu`}
         </Text>
 
         {/* Thanh tiến độ chinh phục cả bộ câu hỏi của môn */}
@@ -345,7 +438,7 @@ function SubjectCard({
               styles.masteryFill,
               {
                 backgroundColor: subject.color,
-                width: `${Math.round((masteredCount / questions.length) * 100)}%`,
+                width: `${totalCount ? Math.round((doneCount / totalCount) * 100) : 0}%`,
               },
             ]}
           />
@@ -357,16 +450,147 @@ function SubjectCard({
 }
 
 /* ------------------------------------------------------------------ */
+/* Màn hình chọn tuần (môn Toán)                                       */
+/* ------------------------------------------------------------------ */
+
+const WEEK_STATUS_META: Record<
+  WeekStatus,
+  { label: string; icon: React.ComponentProps<typeof Ionicons>['name']; color: string }
+> = {
+  completed: { label: 'Đã hoàn thành', icon: 'checkmark-circle', color: colors.success },
+  current: { label: 'Đang học', icon: 'play-circle', color: colors.primary },
+  locked: { label: 'Khoá', icon: 'lock-closed', color: colors.textMuted },
+};
+
+function WeekPicker({
+  isTablet,
+  highestCompletedWeek,
+  onChooseWeek,
+  onBack,
+}: {
+  isTablet: boolean;
+  highestCompletedWeek: number;
+  onChooseWeek: (weekNumber: number) => void;
+  onBack: () => void;
+}) {
+  // Nhóm các tuần theo giai đoạn lớn để danh sách 35 tuần dễ đọc hơn
+  const groups = useMemo(() => {
+    const result: { unit: string; weeks: WeekTopic[] }[] = [];
+    for (const week of MATH_WEEKS) {
+      const last = result[result.length - 1];
+      if (last && last.unit === week.unit) last.weeks.push(week);
+      else result.push({ unit: week.unit, weeks: [week] });
+    }
+    return result;
+  }, []);
+
+  const currentWeek = Math.min(highestCompletedWeek + 1, TOTAL_WEEKS);
+
+  return (
+    <View>
+      <Pressable
+        onPress={onBack}
+        accessibilityRole="button"
+        accessibilityLabel="Quay lại chọn môn"
+        style={({ pressed }) => [styles.backButton, pressed && styles.pressed]}
+      >
+        <Ionicons name="arrow-back" size={20} color={colors.primary} />
+        <Text style={styles.backButtonText}>Đổi môn</Text>
+      </Pressable>
+
+      <Text style={styles.sectionTitle}>Lộ trình Toán Lớp 3</Text>
+      <Text style={styles.sectionSubtitle}>
+        Đã hoàn thành {highestCompletedWeek}/{TOTAL_WEEKS} tuần. Em đang học{' '}
+        <Text style={styles.sectionSubtitleStrong}>Tuần {currentWeek}</Text> — học xong
+        một tuần sẽ mở tuần tiếp theo.
+      </Text>
+
+      {groups.map((group) => (
+        <View key={group.unit} style={styles.weekGroup}>
+          <Text style={styles.weekGroupTitle}>
+            {group.unit} (Tuần {group.weeks[0].weekNumber}–
+            {group.weeks[group.weeks.length - 1].weekNumber})
+          </Text>
+
+          <View style={styles.weekGrid}>
+            {group.weeks.map((week) => (
+              <WeekCard
+                key={week.weekNumber}
+                week={week}
+                status={weekStatus(week.weekNumber, highestCompletedWeek)}
+                isTablet={isTablet}
+                onPress={() => onChooseWeek(week.weekNumber)}
+              />
+            ))}
+          </View>
+        </View>
+      ))}
+    </View>
+  );
+}
+
+function WeekCard({
+  week,
+  status,
+  isTablet,
+  onPress,
+}: {
+  week: WeekTopic;
+  status: WeekStatus;
+  isTablet: boolean;
+  onPress: () => void;
+}) {
+  const meta = WEEK_STATUS_META[status];
+  const isLocked = status === 'locked';
+
+  return (
+    <Pressable
+      onPress={onPress}
+      disabled={isLocked}
+      accessibilityRole="button"
+      accessibilityState={{ disabled: isLocked }}
+      accessibilityLabel={`Tuần ${week.weekNumber}: ${week.title}. ${meta.label}`}
+      style={({ pressed }) => [
+        styles.weekCard,
+        isTablet && styles.weekCardTablet,
+        status === 'current' && styles.weekCardCurrent,
+        status === 'completed' && styles.weekCardCompleted,
+        isLocked && styles.weekCardLocked,
+        pressed && !isLocked && styles.pressed,
+      ]}
+    >
+      <View style={styles.weekCardHeader}>
+        <Text style={[styles.weekNumber, { color: meta.color }]}>
+          Tuần {week.weekNumber}
+        </Text>
+        <Ionicons name={meta.icon} size={18} color={meta.color} />
+      </View>
+
+      <Text style={styles.weekTitle} numberOfLines={3}>
+        {week.title}
+      </Text>
+
+      <Text style={[styles.weekStatusLabel, { color: meta.color }]}>
+        {meta.label}
+        {!isLocked && ` · ${week.questions.length} câu · +${weekBonusMinutes(week)}′`}
+      </Text>
+    </Pressable>
+  );
+}
+
+/* ------------------------------------------------------------------ */
 /* Thanh tiến độ bài test                                              */
 /* ------------------------------------------------------------------ */
 
 function QuizProgress({
   subject,
+  week,
   current,
   total,
   onBack,
 }: {
   subject: Subject;
+  week?: WeekTopic;
   current: number;
   total: number;
   onBack: () => void;
@@ -379,16 +603,22 @@ function QuizProgress({
         <Pressable
           onPress={onBack}
           accessibilityRole="button"
-          accessibilityLabel="Quay lại chọn môn"
+          accessibilityLabel={week ? 'Quay lại chọn tuần' : 'Quay lại chọn môn'}
           style={({ pressed }) => [styles.backButton, pressed && styles.pressed]}
         >
           <Ionicons name="arrow-back" size={20} color={colors.primary} />
-          <Text style={styles.backButtonText}>Đổi môn</Text>
+          <Text style={styles.backButtonText}>{week ? 'Đổi tuần' : 'Đổi môn'}</Text>
         </Pressable>
         <Text style={styles.progressText}>
-          {subject} · Câu {current}/{total}
+          {week ? `Tuần ${week.weekNumber}` : subject} · Câu {current}/{total}
         </Text>
       </View>
+
+      {week && (
+        <Text style={styles.weekLessonTitle} numberOfLines={2}>
+          {week.title}
+        </Text>
+      )}
 
       <View style={styles.progressTrack}>
         <View style={[styles.progressFill, { width: `${percent}%` }]} />
@@ -537,27 +767,42 @@ function FeedbackCard({
 
 function SummaryCard({
   subject,
+  week,
+  weekOutcome,
   summary,
   onRetry,
   onBack,
+  onNextWeek,
   onGoToGame,
 }: {
   subject: Subject;
+  week?: WeekTopic;
+  weekOutcome: WeekOutcome | null;
   summary: SessionSummary;
   onRetry: () => void;
   onBack: () => void;
+  onNextWeek?: () => void;
   onGoToGame: () => void;
 }) {
   const allCorrect =
     summary.totalQuestions > 0 && summary.correctCount === summary.totalQuestions;
+  const failedWeek = weekOutcome !== null && !weekOutcome.passed;
 
   return (
     <View style={styles.summaryCard}>
-      <Text style={styles.summaryEmoji}>{allCorrect ? '🏆' : '🌟'}</Text>
-      <Text style={styles.summaryTitle}>
-        {allCorrect ? 'Xuất sắc! Đúng hết luôn!' : 'Hoàn thành bài rồi!'}
+      <Text style={styles.summaryEmoji}>
+        {failedWeek ? '💪' : allCorrect ? '🏆' : '🌟'}
       </Text>
-      <Text style={styles.summarySubtitle}>Môn {subject}</Text>
+      <Text style={styles.summaryTitle}>
+        {failedWeek
+          ? 'Gần được rồi, thử lại nhé!'
+          : allCorrect
+            ? 'Xuất sắc! Đúng hết luôn!'
+            : 'Hoàn thành bài rồi!'}
+      </Text>
+      <Text style={styles.summarySubtitle}>
+        {week ? `Tuần ${week.weekNumber} · ${week.title}` : `Môn ${subject}`}
+      </Text>
 
       <View style={styles.summaryStats}>
         <SummaryStat
@@ -568,12 +813,69 @@ function SummaryCard({
         <SummaryStat value={`+${summary.minutesEarned}`} label="Phút game" />
       </View>
 
+      {/* Kết quả vượt tuần của lộ trình Toán */}
+      {weekOutcome && (
+        <View
+          style={[
+            styles.weekResultCard,
+            weekOutcome.passed ? styles.weekResultPassed : styles.weekResultFailed,
+          ]}
+        >
+          {weekOutcome.passed ? (
+            <>
+              <Text style={styles.weekResultTitle}>
+                🎉 Em đã vượt qua Tuần {week?.weekNumber}!
+              </Text>
+              {weekOutcome.bonusMinutes > 0 ? (
+                <Text style={styles.weekResultText}>
+                  Thưởng thêm +{weekOutcome.bonusMinutes} phút chơi game
+                  {weekOutcome.unlockedWeek
+                    ? ` và mở Tuần ${weekOutcome.unlockedWeek}.`
+                    : '. Em đã hoàn thành cả lộ trình!'}
+                </Text>
+              ) : (
+                <Text style={styles.weekResultText}>
+                  Tuần này em đã vượt qua trước đó nên không cộng thêm phút, nhưng ôn
+                  lại vẫn được cộng điểm.
+                </Text>
+              )}
+            </>
+          ) : (
+            <>
+              <Text style={styles.weekResultTitle}>Chưa qua được tuần này</Text>
+              <Text style={styles.weekResultText}>
+                Em cần đúng ít nhất {weekOutcome.required}/{summary.totalQuestions} câu.
+                Lần này em đúng {summary.correctCount} câu — làm lại là được ngay!
+              </Text>
+            </>
+          )}
+        </View>
+      )}
+
+      {onNextWeek ? (
+        <Pressable
+          onPress={onNextWeek}
+          accessibilityRole="button"
+          accessibilityLabel="Học tuần tiếp theo"
+          style={({ pressed }) => [styles.primaryButton, pressed && styles.pressed]}
+        >
+          <Ionicons name="arrow-forward" size={20} color={colors.textOnPrimary} />
+          <Text style={styles.primaryButtonText}>Học tuần tiếp theo</Text>
+        </Pressable>
+      ) : null}
+
       <Pressable
         onPress={onGoToGame}
         accessibilityRole="button"
-        style={({ pressed }) => [styles.primaryButton, pressed && styles.pressed]}
+        accessibilityLabel="Sang Góc Game"
+        style={({ pressed }) => [
+          onNextWeek ? styles.secondaryWideButton : styles.primaryButton,
+          pressed && styles.pressed,
+        ]}
       >
-        <Text style={styles.primaryButtonText}>Sang Góc Game chơi thôi 🎮</Text>
+        <Text style={onNextWeek ? styles.secondaryWideText : styles.primaryButtonText}>
+          Sang Góc Game chơi thôi 🎮
+        </Text>
       </Pressable>
 
       <View style={styles.summaryActions}>
@@ -583,7 +885,7 @@ function SummaryCard({
           style={({ pressed }) => [styles.secondaryButton, pressed && styles.pressed]}
         >
           <Ionicons name="refresh" size={18} color={colors.primary} />
-          <Text style={styles.secondaryButtonText}>Đề khác</Text>
+          <Text style={styles.secondaryButtonText}>{week ? 'Làm lại tuần' : 'Đề khác'}</Text>
         </Pressable>
 
         <Pressable
@@ -592,7 +894,9 @@ function SummaryCard({
           style={({ pressed }) => [styles.secondaryButton, pressed && styles.pressed]}
         >
           <Ionicons name="grid-outline" size={18} color={colors.primary} />
-          <Text style={styles.secondaryButtonText}>Chọn môn khác</Text>
+          <Text style={styles.secondaryButtonText}>
+            {week ? 'Chọn tuần khác' : 'Chọn môn khác'}
+          </Text>
         </Pressable>
       </View>
     </View>
@@ -690,6 +994,85 @@ const styles = StyleSheet.create({
     marginTop: spacing.sm,
   },
   masteryFill: { height: '100%', borderRadius: radius.pill },
+
+  // Chọn tuần
+  sectionSubtitleStrong: { fontWeight: '800', color: colors.primary },
+  weekGroup: { marginBottom: spacing.xl },
+  weekGroupTitle: {
+    fontSize: 13,
+    fontWeight: '800',
+    color: colors.textMuted,
+    marginBottom: spacing.md,
+    textTransform: 'uppercase',
+    letterSpacing: 0.4,
+  },
+  weekGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.md },
+  weekCard: {
+    flexBasis: '47%',
+    flexGrow: 1,
+    minHeight: 118,
+    backgroundColor: colors.surface,
+    borderWidth: 2,
+    borderColor: colors.border,
+    borderRadius: radius.md,
+    padding: spacing.md,
+    gap: spacing.xs,
+  },
+  weekCardTablet: { flexBasis: '31%' },
+  weekCardCurrent: { borderColor: colors.primary, backgroundColor: colors.primarySoft },
+  weekCardCompleted: { borderColor: colors.success, backgroundColor: colors.successSoft },
+  weekCardLocked: { opacity: 0.55, backgroundColor: colors.background },
+  weekCardHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  weekNumber: { fontSize: 15, fontWeight: '800' },
+  weekTitle: { flex: 1, fontSize: 12, color: colors.text, lineHeight: 17 },
+  weekStatusLabel: { fontSize: 11, fontWeight: '700' },
+  weekLessonTitle: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: colors.primary,
+    lineHeight: 20,
+  },
+
+  // Kết quả vượt tuần
+  weekResultCard: {
+    alignSelf: 'stretch',
+    borderRadius: radius.md,
+    borderWidth: 2,
+    padding: spacing.md,
+    gap: spacing.xs,
+    marginBottom: spacing.md,
+  },
+  weekResultPassed: {
+    borderColor: colors.success,
+    backgroundColor: colors.successSoft,
+  },
+  weekResultFailed: { borderColor: colors.warning, backgroundColor: colors.warningSoft },
+  weekResultTitle: {
+    fontSize: 15,
+    fontWeight: '800',
+    color: colors.text,
+    textAlign: 'center',
+  },
+  weekResultText: {
+    fontSize: 13,
+    color: colors.textMuted,
+    textAlign: 'center',
+    lineHeight: 19,
+  },
+  secondaryWideButton: {
+    alignSelf: 'stretch',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: colors.primarySoft,
+    paddingVertical: spacing.md,
+    borderRadius: radius.pill,
+    marginTop: spacing.sm,
+  },
+  secondaryWideText: { color: colors.primary, fontSize: 15, fontWeight: '800' },
 
   // Bài test
   quizWrapper: { gap: spacing.lg },

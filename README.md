@@ -42,9 +42,59 @@ Sau đó:
 | `screens/games/colorSortLogic.ts` | Logic thuần của trò sắp xếp màu (sinh đề, luật đi, điều kiện thắng) |
 | `screens/AuthScreen.tsx` | Đăng nhập/đăng ký, trạng thái đồng bộ, đăng xuất (mở từ khu vực phụ huynh) |
 | `types/index.ts` | `Question`, `UserProgress`, `QuizResult`, `Subject`, … |
-| `constants/mockData.ts` | 60 câu hỏi Lớp 3 (20 Toán, 20 Tiếng Việt, 20 Tiếng Anh) + hàm rút đề + các hằng số cấu hình |
+| `constants/mathCurriculum.ts` | Lộ trình Toán 35 tuần + 126 câu hỏi Toán + hàm tra tuần/trạng thái |
+| `constants/mockData.ts` | 40 câu Tiếng Việt + Tiếng Anh, hàm rút đề, hàm trộn lựa chọn, các hằng số cấu hình |
 | `constants/theme.ts` | Bảng màu, khoảng cách, ngưỡng tablet |
 | `lib/supabase.ts` | Supabase Client tuỳ chọn để đồng bộ tiến độ |
+
+## Môn Toán — lộ trình 35 tuần
+
+Toán không rút đề ngẫu nhiên như hai môn còn lại mà đi theo **lộ trình 35 tuần**
+(`constants/mathCurriculum.ts`), chia thành 5 giai đoạn:
+
+| Tuần | Giai đoạn |
+| --- | --- |
+| 1–4 | Ôn tập & phép nhân, phép chia trong phạm vi 1000 |
+| 5–10 | Hình học & đơn vị đo (trung điểm, mm, gam, lít, góc vuông) |
+| 11–18 | Nhân, chia số có 2–3 chữ số với số có một chữ số; biểu thức; tìm x |
+| 19–25 | Các số đến 10 000, phép tính, tháng/năm, số La Mã |
+| 26–35 | Các số đến 100 000, diện tích, kiểm đếm số liệu, ôn tập cuối năm |
+
+Tuần 1–10 có **5 câu/tuần**, tuần 11–35 có **3 câu/tuần** (khung để mở rộng thêm) —
+tổng 126 câu Toán.
+
+### Luồng học
+
+**Học Tập → Toán → chọn tuần → làm bài.** Màn chọn tuần hiển thị 35 thẻ nhóm theo
+giai đoạn, mỗi thẻ có một trong ba trạng thái:
+
+| Trạng thái | Ý nghĩa |
+| --- | --- |
+| **Đã hoàn thành** | `weekNumber <= highestCompletedWeek` |
+| **Đang học** | `weekNumber === highestCompletedWeek + 1` |
+| **Khoá** | Các tuần sau đó — thẻ bị `disabled`, bấm không vào được |
+
+### Điều kiện qua tuần và phần thưởng
+
+- Cần đúng **>= 2/3 số câu** của tuần (`WEEK_PASS_RATIO = 2/3`): tuần 5 câu cần 4/5,
+  tuần 3 câu cần 2/3.
+  > Không dùng 0.7 vì với tuần 3 câu thì `ceil(3 x 0.7) = 3` — bắt học sinh 8 tuổi
+  > phải đúng tuyệt đối mới qua được là quá khắt khe.
+- Vượt qua tuần thì mở tuần kế tiếp và **thưởng `difficulty x 2` phút** chơi game
+  (2 phút cho tuần 1–10, 4 phút cho tuần 11–25, 6 phút cho tuần 26–35), cộng thêm
+  phút của từng câu đúng.
+- **Chỉ thưởng ở lần đầu** vượt qua tuần. Làm lại tuần cũ vẫn được cộng điểm nhưng
+  không cộng phút, để không thể lặp một tuần dễ nhằm lấy giờ chơi vô hạn.
+- Tiến độ (`highestCompletedWeek`) lưu trong AsyncStorage cùng các dữ liệu khác.
+  Phụ huynh bấm *Đặt lại điểm & thời gian* sẽ đưa tiến độ tuần về 0.
+
+### Trộn thứ tự lựa chọn
+
+Mọi câu hỏi (cả ba môn) đều được trộn lại thứ tự A/B/C/D khi tạo đề
+(`shuffleQuestionOptions` trong `constants/mockData.ts`). Lý do: bộ đề tĩnh soạn tay
+rất khó phân bố đáp án đều — bản đầu của lộ trình Toán có đáp án **D chỉ xuất hiện
+3/125 lần**, học sinh hoàn toàn có thể đoán theo vị trí. Trộn khi tạo đề đưa phân bố
+về đều (lệch tối đa 2.8% so với 25%) và khiến làm lại cùng một câu không đoán được.
 
 ## Góc Game — 2 trò chơi tích hợp
 
@@ -103,6 +153,8 @@ dụng — bấm để đồng hồ chạy mà không mở trò chơi nào.
 | `rewardMinutes` (từng câu) | `2`–`3` | Số phút chơi game khi trả lời đúng |
 | `REPEAT_ANSWER_GIVES_MINUTES` | `false` | Câu đã từng đúng thì lần sau chỉ cộng điểm, không cộng phút (chống "farm" giờ chơi bằng cách làm lại). Đổi `true` nếu muốn cộng phút mọi lần. |
 | `MAX_ACCUMULATED_MINUTES` | `120` | Trần thời gian tích luỹ |
+| `WEEK_PASS_RATIO` | `2/3` | Tỉ lệ câu đúng tối thiểu để qua một tuần Toán (trong `mathCurriculum.ts`) |
+| `WEEK_BONUS_MINUTES_PER_DIFFICULTY` | `2` | Phút thưởng cho mỗi bậc độ khó của tuần (trong `mathCurriculum.ts`) |
 | `DEFAULT_PARENT_PIN` | `'1234'` | Mã PIN phụ huynh |
 
 ## Build APK Android bằng GitHub Actions

@@ -80,6 +80,8 @@ export interface StoredProgress {
   availableSeconds: number;
   /** Danh sách id các câu đã từng trả lời đúng */
   masteredQuestionIds: string[];
+  /** Tuần Toán cao nhất đã vượt qua trong lộ trình 35 tuần (0 = chưa qua tuần nào) */
+  highestCompletedWeek: number;
   lastUpdated: string;
 }
 
@@ -103,6 +105,26 @@ export type SyncState =
 
 /** Kết quả một lời gọi tới Supabase */
 export type SyncResult<T> = { ok: true; data: T } | { ok: false; error: string };
+
+/** Trạng thái của một tuần học trên màn hình chọn tuần */
+export type WeekStatus = 'completed' | 'current' | 'locked';
+
+/**
+ * Một tuần trong lộ trình Toán Lớp 3 (35 tuần).
+ * Xem dữ liệu tại `constants/mathCurriculum.ts`.
+ */
+export interface WeekTopic {
+  /** Số tuần, từ 1 đến 35 */
+  weekNumber: number;
+  /** Tên bài học của tuần */
+  title: string;
+  /** Danh sách câu hỏi của tuần */
+  questions: Question[];
+  /** Giai đoạn lớn chứa tuần này, ví dụ "Các số đến 10 000" */
+  unit: string;
+  /** Độ khó 1-3, dùng để tính phút chơi game thưởng khi hoàn thành tuần */
+  difficulty: 1 | 2 | 3;
+}
 
 /** Các trò chơi tích hợp trong Góc Game */
 export type GameId = 'mario-mini' | 'color-sort';

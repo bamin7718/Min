@@ -1,4 +1,5 @@
 import type { Question, Subject, SubjectInfo } from '../types';
+import { MATH_QUESTIONS } from './mathCurriculum';
 import { colors } from './theme';
 
 /** Điểm thưởng cho mỗi câu trả lời đúng */
@@ -51,200 +52,15 @@ export const SUBJECTS: SubjectInfo[] = [
 ];
 
 /**
- * Bộ câu hỏi trắc nghiệm kiến thức Lớp 3 — 20 câu mỗi môn.
+ * Câu hỏi Tiếng Việt và Tiếng Anh — 20 câu mỗi môn.
+ *
+ * Câu hỏi Toán KHÔNG nằm ở đây: môn Toán được tổ chức theo lộ trình 35 tuần
+ * trong `constants/mathCurriculum.ts` để tránh có hai nguồn dữ liệu trùng id.
  *
  * LƯU Ý: không đổi `id` của câu đã có, vì `masteredQuestionIds` lưu trong
  * AsyncStorage/Supabase tham chiếu tới các id này.
  */
-export const QUESTIONS: Question[] = [
-  /* ==================== TOÁN ==================== */
-  {
-    id: 'toan-01',
-    subject: 'Toán',
-    content: 'Kết quả của phép tính 7 × 8 là bao nhiêu?',
-    options: ['54', '56', '58', '63'],
-    correctAnswer: 1,
-    rewardMinutes: 2,
-    explanation: '7 × 8 = 56. Em nhớ lại bảng nhân 7 nhé!',
-  },
-  {
-    id: 'toan-02',
-    subject: 'Toán',
-    content:
-      'Một cửa hàng có 245 kg gạo, đã bán 128 kg. Hỏi cửa hàng còn lại bao nhiêu kg gạo?',
-    options: ['113 kg', '117 kg', '123 kg', '127 kg'],
-    correctAnswer: 1,
-    rewardMinutes: 3,
-    explanation: '245 − 128 = 117 (kg).',
-  },
-  {
-    id: 'toan-03',
-    subject: 'Toán',
-    content: 'Một hình vuông có cạnh 6 cm. Chu vi hình vuông đó là bao nhiêu?',
-    options: ['12 cm', '18 cm', '24 cm', '36 cm'],
-    correctAnswer: 2,
-    rewardMinutes: 2,
-    explanation: 'Chu vi hình vuông = cạnh × 4 = 6 × 4 = 24 (cm).',
-  },
-  {
-    id: 'toan-04',
-    subject: 'Toán',
-    content: 'Kết quả của phép tính 6 × 9 là bao nhiêu?',
-    options: ['54', '45', '56', '63'],
-    correctAnswer: 0,
-    rewardMinutes: 2,
-    explanation: '6 × 9 = 54.',
-  },
-  {
-    id: 'toan-05',
-    subject: 'Toán',
-    content: 'Kết quả của phép tính 42 : 6 là bao nhiêu?',
-    options: ['6', '8', '7', '9'],
-    correctAnswer: 2,
-    rewardMinutes: 2,
-    explanation: '42 : 6 = 7, vì 6 × 7 = 42.',
-  },
-  {
-    id: 'toan-06',
-    subject: 'Toán',
-    content: 'Tính 1234 + 2345 = ?',
-    options: ['3479', '3589', '3679', '3579'],
-    correctAnswer: 3,
-    rewardMinutes: 3,
-    explanation: '1234 + 2345 = 3579. Em cộng lần lượt từ hàng đơn vị nhé.',
-  },
-  {
-    id: 'toan-07',
-    subject: 'Toán',
-    content: 'Số lớn nhất có ba chữ số khác nhau là số nào?',
-    options: ['789', '987', '999', '978'],
-    correctAnswer: 1,
-    rewardMinutes: 3,
-    explanation:
-      '987 — chọn chữ số lớn nhất cho hàng trăm, rồi lần lượt các chữ số lớn tiếp theo. 999 có ba chữ số giống nhau nên không hợp lệ.',
-  },
-  {
-    id: 'toan-08',
-    subject: 'Toán',
-    content: 'Thực hiện phép chia 17 : 5, em được kết quả nào?',
-    options: ['3 dư 2', '2 dư 7', '3 dư 1', '4 dư 1'],
-    correctAnswer: 0,
-    rewardMinutes: 3,
-    explanation: '5 × 3 = 15, còn lại 17 − 15 = 2. Vậy 17 : 5 = 3 (dư 2).',
-  },
-  {
-    id: 'toan-09',
-    subject: 'Toán',
-    content: 'Tìm x, biết: x × 4 = 32',
-    options: ['6', '7', '9', '8'],
-    correctAnswer: 3,
-    rewardMinutes: 3,
-    explanation: 'x = 32 : 4 = 8.',
-  },
-  {
-    id: 'toan-10',
-    subject: 'Toán',
-    content:
-      'Một hình chữ nhật có chiều dài 8 cm, chiều rộng 5 cm. Diện tích hình đó là bao nhiêu?',
-    options: ['13 cm²', '26 cm²', '40 cm²', '80 cm²'],
-    correctAnswer: 2,
-    rewardMinutes: 3,
-    explanation: 'Diện tích = dài × rộng = 8 × 5 = 40 (cm²).',
-  },
-  {
-    id: 'toan-11',
-    subject: 'Toán',
-    content:
-      'Một hình chữ nhật có chiều dài 9 cm, chiều rộng 4 cm. Chu vi hình đó là bao nhiêu?',
-    options: ['26 cm', '13 cm', '22 cm', '36 cm'],
-    correctAnswer: 0,
-    rewardMinutes: 3,
-    explanation: 'Chu vi = (dài + rộng) × 2 = (9 + 4) × 2 = 26 (cm).',
-  },
-  {
-    id: 'toan-12',
-    subject: 'Toán',
-    content: 'Một phần tư (1/4) của 20 là bao nhiêu?',
-    options: ['4', '5', '6', '80'],
-    correctAnswer: 1,
-    rewardMinutes: 2,
-    explanation: 'Muốn tìm 1/4 của 20 thì lấy 20 : 4 = 5.',
-  },
-  {
-    id: 'toan-13',
-    subject: 'Toán',
-    content: 'Gấp số 7 lên 5 lần thì được số nào?',
-    options: ['12', '40', '35', '2'],
-    correctAnswer: 2,
-    rewardMinutes: 2,
-    explanation: 'Gấp lên nhiều lần thì làm phép nhân: 7 × 5 = 35.',
-  },
-  {
-    id: 'toan-14',
-    subject: 'Toán',
-    content: 'Giảm số 36 đi 4 lần thì được số nào?',
-    options: ['32', '9', '40', '144'],
-    correctAnswer: 1,
-    rewardMinutes: 2,
-    explanation: 'Giảm đi nhiều lần thì làm phép chia: 36 : 4 = 9.',
-  },
-  {
-    id: 'toan-15',
-    subject: 'Toán',
-    content: '1 m bằng bao nhiêu xăng-ti-mét?',
-    options: ['1000 cm', '10 cm', '100 cm', '60 cm'],
-    correctAnswer: 2,
-    rewardMinutes: 2,
-    explanation: '1 m = 100 cm.',
-  },
-  {
-    id: 'toan-16',
-    subject: 'Toán',
-    content: '1 kg bằng bao nhiêu gam?',
-    options: ['1000 g', '100 g', '10 g', '500 g'],
-    correctAnswer: 0,
-    rewardMinutes: 2,
-    explanation: '1 kg = 1000 g.',
-  },
-  {
-    id: 'toan-17',
-    subject: 'Toán',
-    content: 'Số La Mã VIII đọc là số nào?',
-    options: ['6', '13', '7', '8'],
-    correctAnswer: 3,
-    rewardMinutes: 2,
-    explanation: 'V là 5, thêm III là 3 nữa: 5 + 3 = 8.',
-  },
-  {
-    id: 'toan-18',
-    subject: 'Toán',
-    content: '1 giờ có bao nhiêu phút?',
-    options: ['24 phút', '30 phút', '60 phút', '100 phút'],
-    correctAnswer: 2,
-    rewardMinutes: 2,
-    explanation: '1 giờ = 60 phút.',
-  },
-  {
-    id: 'toan-19',
-    subject: 'Toán',
-    content:
-      'Lan có 8 cái kẹo. Hùng có nhiều hơn Lan 5 cái kẹo. Hỏi Hùng có bao nhiêu cái kẹo?',
-    options: ['13 cái', '3 cái', '40 cái', '12 cái'],
-    correctAnswer: 0,
-    rewardMinutes: 3,
-    explanation: '"Nhiều hơn" thì làm phép cộng: 8 + 5 = 13 (cái).',
-  },
-  {
-    id: 'toan-20',
-    subject: 'Toán',
-    content:
-      'Một thùng có 6 hộp bánh, mỗi hộp có 8 chiếc bánh. Hỏi thùng đó có bao nhiêu chiếc bánh?',
-    options: ['14 chiếc', '48 chiếc', '42 chiếc', '68 chiếc'],
-    correctAnswer: 1,
-    rewardMinutes: 3,
-    explanation: '6 hộp, mỗi hộp 8 chiếc: 6 × 8 = 48 (chiếc).',
-  },
-
+const LANGUAGE_QUESTIONS: Question[] = [
   /* ==================== TIẾNG VIỆT ==================== */
   {
     id: 'tv-01',
@@ -641,6 +457,9 @@ export const QUESTIONS: Question[] = [
   },
 ];
 
+/** Toàn bộ câu hỏi của cả ba môn */
+export const QUESTIONS: Question[] = [...MATH_QUESTIONS, ...LANGUAGE_QUESTIONS];
+
 /** Lấy toàn bộ câu hỏi của một môn học */
 export function getQuestionsBySubject(subject: Subject): Question[] {
   return QUESTIONS.filter((question) => question.subject === subject);
@@ -678,4 +497,25 @@ export function pickQuizQuestions(
   const reviewed = shuffle(pool.filter((question) => mastered.has(question.id)));
 
   return [...fresh, ...reviewed].slice(0, count);
+}
+
+/**
+ * Trả về bản sao của câu hỏi với thứ tự lựa chọn được trộn ngẫu nhiên,
+ * `correctAnswer` được tính lại theo vị trí mới.
+ *
+ * Mục đích: bộ đề tĩnh khó phân bố đáp án đều tay (bản đầu có đáp án D chỉ xuất
+ * hiện 3/125 lần), nên học sinh có thể đoán theo vị trí. Trộn khi tạo đề vừa
+ * cân bằng vị trí đáp án, vừa khiến làm lại cùng một câu không đoán được.
+ */
+export function shuffleQuestionOptions(question: Question): Question {
+  const indices = shuffle([0, 1, 2, 3]);
+  const options = indices.map((i) => question.options[i]) as Question['options'];
+  const correctAnswer = indices.indexOf(question.correctAnswer);
+
+  return { ...question, options, correctAnswer };
+}
+
+/** Trộn lựa chọn cho cả một danh sách câu hỏi */
+export function shuffleAllOptions(questions: Question[]): Question[] {
+  return questions.map(shuffleQuestionOptions);
 }

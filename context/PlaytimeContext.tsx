@@ -16,6 +16,7 @@ import {
   POINTS_PER_CORRECT,
   REPEAT_ANSWER_GIVES_MINUTES,
 } from '../constants/mockData';
+import { TOTAL_WEEKS, weekBonusMinutes, weekPassThreshold } from './../constants/mathCurriculum';
 import { fetchRemoteProgress, pushRemoteProgress } from '../lib/supabase';
 import type {
   ProgressSyncPayload,
@@ -23,6 +24,7 @@ import type {
   StoredProgress,
   SyncState,
   UserProgress,
+  WeekTopic,
 } from '../types';
 import { useAuth } from './AuthContext';
 
@@ -45,6 +47,18 @@ export interface RewardOutcome {
   alreadyMastered: boolean;
 }
 
+/** Kết quả sau khi làm xong một tuần Toán */
+export interface WeekOutcome {
+  /** Đủ số câu đúng để vượt qua tuần hay chưa */
+  passed: boolean;
+  /** Số câu đúng cần có để qua tuần */
+  required: number;
+  /** Phút chơi game thưởng thêm (chỉ có ở lần đầu vượt qua tuần) */
+  bonusMinutes: number;
+  /** Tuần vừa được mở khoá, `null` nếu không mở thêm tuần nào */
+  unlockedWeek: number | null;
+}
+
 interface PlaytimeContextValue {
   /** `false` khi còn đang đọc dữ liệu từ AsyncStorage */
   hydrated: boolean;
@@ -59,6 +73,8 @@ interface PlaytimeContextValue {
   isLocked: boolean;
   /** Id các câu đã từng trả lời đúng */
   masteredQuestionIds: string[];
+  /** Tuần Toán cao nhất đã vượt qua (0 = chưa qua tuần nào) */
+  highestCompletedWeek: number;
   /** Tiến độ ở dạng công khai, dùng để đồng bộ Supabase */
   progress: UserProgress;
 
@@ -66,6 +82,8 @@ interface PlaytimeContextValue {
   submitAnswer: (question: Question, selectedAnswer: number) => RewardOutcome;
   startPlaying: () => void;
   pausePlaying: () => void;
+  /** Ghi nhận kết quả một tuần Toán: mở tuần kế tiếp và cộng phút thưởng */
+  completeWeek: (week: WeekTopic, correctCount: number) => WeekOutcome;
   /** Kiểm tra mã PIN phụ huynh */
   verifyParentPin: (pin: string) => boolean;
   /** Phụ huynh cấp thêm phút, cần đúng mã PIN. Trả về `true` nếu thành công */
@@ -105,6 +123,7 @@ export function PlaytimeProvider({ children }: { children: React.ReactNode }) {
   const [totalPoints, setTotalPoints] = useState(0);
   const [availableSeconds, setAvailableSeconds] = useState(0);
   const [masteredQuestionIds, setMasteredQuestionIds] = useState<string[]>([]);
+  const [highestCompletedWeek, setHighestCompletedWeek] = useState(0);
   const [isPlaying, setIsPlaying] = useState(false);
 
   /**
@@ -148,6 +167,9 @@ export function PlaytimeProvider({ children }: { children: React.ReactNode }) {
           setMasteredQuestionIds(
             Array.isArray(saved.masteredQuestionIds) ? saved.masteredQuestionIds : [],
           );
+          setHighestCompletedWeek(
+            Math.min(TOTAL_WEEKS, Math.max(0, Math.floor(saved.highestCompletedWeek ?? 0))),
+          );
           setLastUpdated(saved.lastUpdated ?? null);
         }
       } catch (error) {
@@ -172,6 +194,7 @@ export function PlaytimeProvider({ children }: { children: React.ReactNode }) {
         totalPoints,
         availableSeconds,
         masteredQuestionIds,
+        highestCompletedWeek,
         lastUpdated,
       };
       AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(payload)).catch((error) =>
@@ -180,7 +203,14 @@ export function PlaytimeProvider({ children }: { children: React.ReactNode }) {
     }, 600);
 
     return () => clearTimeout(timeoutId);
-  }, [hydrated, totalPoints, availableSeconds, masteredQuestionIds, lastUpdated]);
+  }, [
+    hydrated,
+    totalPoints,
+    availableSeconds,
+    masteredQuestionIds,
+    highestCompletedWeek,
+    lastUpdated,
+  ]);
 
   // ----- Đồng hồ đếm ngược -----
   // Dùng mốc thời gian thực (Date.now) để không bị lệch khi timer bị điều tiết.
@@ -395,6 +425,38 @@ export function PlaytimeProvider({ children }: { children: React.ReactNode }) {
 
   const pausePlaying = useCallback(() => setIsPlaying(false), []);
 
+  const completeWeek = useCallback(
+    (week: WeekTopic, correctCount: number): WeekOutcome => {
+      const required = weekPassThreshold(week);
+      const passed = correctCount >= required;
+
+      if (!passed) {
+        return { passed: false, required, bonusMinutes: 0, unlockedWeek: null };
+      }
+
+      // Chỉ thưởng và mở khoá ở lần ĐẦU vượt qua tuần, để làm lại tuần cũ
+      // không thể cộng phút chơi game vô hạn.
+      const isFirstTime = week.weekNumber > highestCompletedWeek;
+      if (!isFirstTime) {
+        return { passed: true, required, bonusMinutes: 0, unlockedWeek: null };
+      }
+
+      const bonusMinutes = weekBonusMinutes(week);
+      setAvailableSeconds((prev) => clampSeconds(prev + bonusMinutes * 60));
+      setHighestCompletedWeek((prev) => Math.max(prev, week.weekNumber));
+      touch();
+
+      const nextWeek = week.weekNumber + 1;
+      return {
+        passed: true,
+        required,
+        bonusMinutes,
+        unlockedWeek: nextWeek <= TOTAL_WEEKS ? nextWeek : null,
+      };
+    },
+    [highestCompletedWeek, touch],
+  );
+
   const verifyParentPin = useCallback(
     (pin: string) => pin === DEFAULT_PARENT_PIN,
     [],
@@ -420,6 +482,7 @@ export function PlaytimeProvider({ children }: { children: React.ReactNode }) {
       setTotalPoints(0);
       setAvailableSeconds(0);
       setMasteredQuestionIds([]);
+      setHighestCompletedWeek(0);
       touch();
       return true;
     },
@@ -437,6 +500,7 @@ export function PlaytimeProvider({ children }: { children: React.ReactNode }) {
       isPlaying,
       isLocked: availableSeconds <= 0,
       masteredQuestionIds,
+      highestCompletedWeek,
       progress: {
         totalPoints,
         accumulatedGameMinutes: availableMinutes,
@@ -445,6 +509,7 @@ export function PlaytimeProvider({ children }: { children: React.ReactNode }) {
       submitAnswer,
       startPlaying,
       pausePlaying,
+      completeWeek,
       verifyParentPin,
       grantMinutesByParent,
       resetProgress,
@@ -460,10 +525,12 @@ export function PlaytimeProvider({ children }: { children: React.ReactNode }) {
       availableMinutes,
       isPlaying,
       masteredQuestionIds,
+      highestCompletedWeek,
       lastUpdated,
       submitAnswer,
       startPlaying,
       pausePlaying,
+      completeWeek,
       verifyParentPin,
       grantMinutesByParent,
       resetProgress,
