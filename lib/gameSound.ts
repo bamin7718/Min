@@ -21,6 +21,7 @@ export type SoundName =
   | 'wave'
   | 'boss'
   | 'powerup'
+  | 'minigun'
   | 'gameOver';
 
 interface ToneSpec {
@@ -68,6 +69,17 @@ export function describe(name: SoundName): ToneSpec {
         gain: 0.28,
         noise: true,
       };
+    case 'minigun':
+      // Ngắn hơn và có tiếng ồn trộn vào: nhịp 20 phát/giây mà tiếng dài thì
+      // các phát dính vào nhau thành một tiếng rè liên tục.
+      return {
+        type: 'square',
+        fromHz: 520,
+        toHz: 150,
+        duration: 0.045,
+        gain: 0.13,
+        noise: true,
+      };
     case 'powerup':
       // Quãng đi lên nghe như "được thưởng"
       return { type: 'sine', fromHz: 660, toHz: 1760, duration: 0.26, gain: 0.2 };
@@ -106,6 +118,8 @@ const MIN_GAP_MS: Record<SoundName, number> = {
   wave: 400,
   boss: 800,
   powerup: 200,
+  // 40ms: khớp nhịp 50ms/viên của súng liên thanh nên nghe được từng phát
+  minigun: 40,
   gameOver: 800,
 };
 

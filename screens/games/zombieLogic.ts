@@ -15,7 +15,7 @@
 /* ------------------------------------------------------------------ */
 
 export type ZombieKind = 'normal' | 'fast' | 'tank' | 'boomer' | 'boss';
-export type WeaponId = 'pistol' | 'shotgun' | 'smg' | 'sniper';
+export type WeaponId = 'pistol' | 'shotgun' | 'smg' | 'sniper' | 'minigun';
 export type UpgradeId =
   | 'damage'
   | 'fireRate'
@@ -47,6 +47,7 @@ export type SoundEvent =
   | 'wave'
   | 'boss'
   | 'powerup'
+  | 'minigun'
   | 'gameOver';
 
 export interface Player {
@@ -64,6 +65,10 @@ export interface Player {
   shield: number;
   /** Giây còn lại của siêu tốc đạn (vật phẩm ⚡) */
   frenzy: number;
+  /** Giây còn lại của tia lửa nòng súng — phần vẽ dùng để nhấp sáng đầu nòng */
+  muzzleFlash: number;
+  /** id zombie đang bị khoá mục tiêu, để vẽ tia ngắm */
+  lockedTargetId: number | null;
 }
 
 export interface Zombie {
@@ -87,6 +92,8 @@ export interface Zombie {
   summonCd?: number;
 }
 
+export type BulletLook = 'normal' | 'tracer' | 'crit';
+
 export interface Bullet {
   id: number;
   x: number;
@@ -94,6 +101,8 @@ export interface Bullet {
   vx: number;
   vy: number;
   damage: number;
+  /** Cách vẽ viên đạn: điểm thường, vệt sáng, hay đạn chí mạng */
+  look: BulletLook;
   /** Số zombie còn có thể xuyên qua */
   pierce: number;
   radius: number;
@@ -190,7 +199,7 @@ export interface World {
 /* ------------------------------------------------------------------ */
 
 export const MAX_ZOMBIES_ALIVE = 18;
-export const MAX_BULLETS = 40;
+export const MAX_BULLETS = 48;
 export const MAX_PARTICLES = 26;
 export const MAX_GOLD_POPS = 10;
 export const MAX_POWERUPS = 4;
@@ -277,6 +286,18 @@ export interface WeaponSpec {
   /** Giá mua trong shop, 0 nghĩa là có sẵn từ đầu */
   price: number;
   hint: string;
+  /**
+   * Độ chệch NGẪU NHIÊN của từng viên, tính bằng radian.
+   * Khác `spread`: spread là góc toả cố định của chùm đạn (súng hoa cải), còn
+   * jitter làm mỗi viên lệch một chút khác nhau — cảm giác xả đạn thật hơn.
+   */
+  jitter?: number;
+  /** Tỉ lệ gây sát thương chí mạng, 0..1 */
+  critChance?: number;
+  /** Sát thương chí mạng nhân mấy lần */
+  critMultiplier?: number;
+  /** Đạn vẽ thành vệt sáng dài thay vì điểm tròn */
+  tracer?: boolean;
 }
 
 export const WEAPONS: Record<WeaponId, WeaponSpec> = {
@@ -336,9 +357,35 @@ export const WEAPONS: Record<WeaponId, WeaponSpec> = {
     price: 300,
     hint: 'Sát thương rất lớn, xuyên 3 zombie',
   },
+  minigun: {
+    id: 'minigun',
+    name: 'Súng liên thanh',
+    emoji: '💥',
+    damage: 20,
+    // 50ms/viên — nhanh gấp gần 7 lần súng lục (340ms)
+    interval: 0.05,
+    bulletSpeed: 620,
+    pellets: 1,
+    spread: 0,
+    pierce: 0,
+    bulletRadius: 4,
+    price: 100,
+    hint: 'Xả mưa đạn, có cơ hội gây sát thương chí mạng',
+    // ±5° cho mỗi viên
+    jitter: (5 * Math.PI) / 180,
+    critChance: 0.22,
+    critMultiplier: 2.2,
+    tracer: true,
+  },
 };
 
-export const WEAPON_ORDER: WeaponId[] = ['pistol', 'shotgun', 'smg', 'sniper'];
+export const WEAPON_ORDER: WeaponId[] = [
+  'pistol',
+  'shotgun',
+  'smg',
+  'sniper',
+  'minigun',
+];
 
 export interface UpgradeSpec {
   id: UpgradeId;
@@ -355,8 +402,12 @@ export interface UpgradeSpec {
 /* ---- Mỗi bậc nâng cấp cộng một lượng CỐ ĐỊNH ---- */
 export const DAMAGE_STEP = 15;
 export const FIRE_RATE_STEP_MS = 50;
-/** Khoảng nghỉ giữa hai phát không được xuống dưới mức này */
-export const MIN_FIRE_INTERVAL = 0.06;
+/**
+ * Khoảng nghỉ giữa hai phát không được xuống dưới mức này.
+ * 0.04 chứ không phải 0.06: súng liên thanh vốn đã là 0.05, sàn 0.06 sẽ kẹp nó
+ * chậm lại và nâng cấp tốc độ bắn thành vô nghĩa với khẩu đó.
+ */
+export const MIN_FIRE_INTERVAL = 0.04;
 export const MOVE_SPEED_STEP = 0.5;
 /** 1 điểm "tốc độ" của mẫu tương ứng bao nhiêu dp/giây */
 export const MOVE_SPEED_UNIT = 22;
@@ -531,6 +582,8 @@ export function createWorld(areaW: number, areaH: number, seed = 20260901): Worl
       aimY: -1,
       shield: 0,
       frenzy: 0,
+      muzzleFlash: 0,
+      lockedTargetId: null,
     },
     zombies: [],
     bullets: [],
@@ -725,17 +778,30 @@ function fire(world: World): void {
 
   const baseAngle = Math.atan2(dirY, dirX);
   const shots = spec.pellets + world.upgrades.multishot;
-  const damage = bulletDamage(world);
+  const baseDamage = bulletDamage(world);
   const pierce = spec.pierce + world.upgrades.pierce;
+
+  // Khoá mục tiêu để phần vẽ kẻ tia ngắm về phía con đang nhắm
+  world.player.lockedTargetId = target ? target.id : null;
+  // Tia lửa nòng súng nhấp một nhịp rất ngắn
+  world.player.muzzleFlash = 0.06;
 
   for (let i = 0; i < shots; i++) {
     if (world.bullets.length >= MAX_BULLETS) break;
+
     // Toả đều quanh hướng nhắm; một viên thì bắn thẳng
     const offset =
       shots === 1
         ? 0
         : (i / (shots - 1) - 0.5) * (spec.spread > 0 ? spec.spread * 2 : 0.3);
-    const angle = baseAngle + offset;
+    // Cộng thêm độ chệch ngẫu nhiên của khẩu súng
+    const jitter = spec.jitter ? (rand(world) * 2 - 1) * spec.jitter : 0;
+    const angle = baseAngle + offset + jitter;
+
+    // Chí mạng quyết định NGAY LÚC BẮN để phần vẽ đổi màu viên đạn cho khớp
+    const crit = spec.critChance ? rand(world) < spec.critChance : false;
+    const damage = crit ? baseDamage * (spec.critMultiplier ?? 2) : baseDamage;
+
     world.bullets.push({
       id: world.nextId++,
       // Sinh đạn ở ĐÚNG tâm người chơi, không đẩy ra trước nòng: nếu đẩy ra một
@@ -746,6 +812,7 @@ function fire(world: World): void {
       vx: Math.cos(angle) * spec.bulletSpeed,
       vy: Math.sin(angle) * spec.bulletSpeed,
       damage,
+      look: crit ? 'crit' : spec.tracer ? 'tracer' : 'normal',
       pierce,
       radius: spec.bulletRadius,
       hitIds: [],
@@ -753,7 +820,9 @@ function fire(world: World): void {
   }
 
   world.fireCd = fireInterval(world);
-  pushEvent(world, 'shoot');
+  // Súng liên thanh có tiếng riêng: tiếng 'shoot' dài 70ms mà nhịp bắn 50ms thì
+  // các phát dính vào nhau thành một tiếng rè.
+  pushEvent(world, world.weapon === 'minigun' ? 'minigun' : 'shoot');
 }
 
 /* ------------------------------------------------------------------ */
@@ -893,6 +962,7 @@ export function advance(world: World, dt: number, input: Input): void {
   p.invuln = Math.max(0, p.invuln - dt);
   p.shield = Math.max(0, p.shield - dt);
   p.frenzy = Math.max(0, p.frenzy - dt);
+  p.muzzleFlash = Math.max(0, p.muzzleFlash - dt);
   p.maxHp = maxHpOf(world);
 
   /* ---- Bắn ---- */
@@ -918,7 +988,10 @@ export function advance(world: World, dt: number, input: Input): void {
       z.hp -= b.damage;
       z.hitFlash = 0.1;
       b.hitIds.push(z.id);
-      spawnParticles(world, b.x, b.y, 2, '#FCA5A5', 120);
+      // Chí mạng thì nhiều hạt hơn và màu vàng cho dễ thấy
+      const crit = b.look === 'crit';
+      spawnParticles(world, b.x, b.y, crit ? 5 : 2, crit ? '#FDE047' : '#FCA5A5',
+        crit ? 200 : 120);
       pushEvent(world, 'hit');
 
       if (b.pierce > 0) {
@@ -999,6 +1072,7 @@ export function advance(world: World, dt: number, input: Input): void {
             vx: Math.cos(base + k * 0.26) * 200,
             vy: Math.sin(base + k * 0.26) * 200,
             damage: 12,
+            look: 'normal',
             pierce: 0,
             radius: 7,
             hitIds: [],
@@ -1193,6 +1267,8 @@ export interface Frame {
   zombiesLeft: number;
   bossAlive: boolean;
   upgrades: Record<UpgradeId, number>;
+  /** Vị trí zombie đang bị khoá mục tiêu, `null` khi sân trống */
+  lockedTarget: { x: number; y: number; radius: number } | null;
 }
 
 export function snapshot(world: World): Frame {
@@ -1225,6 +1301,11 @@ export function snapshot(world: World): Frame {
     zombiesLeft: world.spawnQueue + world.zombies.length,
     bossAlive: world.bossAlive,
     upgrades: { ...world.upgrades },
+    lockedTarget: (() => {
+      if (world.player.lockedTargetId === null) return null;
+      const target = world.zombies.find((z) => z.id === world.player.lockedTargetId);
+      return target ? { x: target.x, y: target.y, radius: target.radius } : null;
+    })(),
   };
 }
 

@@ -19,9 +19,13 @@ import {
   buyUpgrade,
   buyWeapon,
   createWorld,
+  cycleWeapon,
+  DAMAGE_STEP,
   drainEvents,
+  FIRE_RATE_STEP_MS,
   HEAL_AMOUNT,
   HEAL_PRICE,
+  MIN_FIRE_INTERVAL,
   POWERUPS,
   priceAt,
   selectWeapon,
@@ -147,6 +151,121 @@ const DotView = React.memo(function DotView({
   );
 });
 
+/**
+ * Tia ngắm kẻ từ nhân vật tới zombie đang bị khoá mục tiêu.
+ *
+ * Vẽ bằng MỘT View bị xoay: dài đúng bằng khoảng cách, gốc xoay đặt ở đầu bên
+ * trái để tia luôn bắt đầu từ nhân vật.
+ */
+const AimLine = React.memo(function AimLine({
+  fromX,
+  fromY,
+  toX,
+  toY,
+}: {
+  fromX: number;
+  fromY: number;
+  toX: number;
+  toY: number;
+}) {
+  const dx = toX - fromX;
+  const dy = toY - fromY;
+  const length = Math.hypot(dx, dy);
+  if (length < 1) return null;
+
+  return (
+    <View
+      pointerEvents="none"
+      style={{
+        position: 'absolute',
+        left: fromX,
+        top: fromY - 1,
+        width: length,
+        height: 2,
+        backgroundColor: '#F87171',
+        opacity: 0.45,
+        transform: [{ translateX: 0 }, { rotate: `${Math.atan2(dy, dx)}rad` }],
+        transformOrigin: 'left center',
+      }}
+    />
+  );
+});
+
+/** Tia lửa nòng súng, nhấp một nhịp rất ngắn mỗi lần bắn */
+const MuzzleFlash = React.memo(function MuzzleFlash({
+  x,
+  y,
+  aimX,
+  aimY,
+  radius,
+}: {
+  x: number;
+  y: number;
+  aimX: number;
+  aimY: number;
+  radius: number;
+}) {
+  const distance = radius + 8;
+  const size = 18;
+  return (
+    <View
+      pointerEvents="none"
+      style={{
+        position: 'absolute',
+        left: x + aimX * distance - size / 2,
+        top: y + aimY * distance - size / 2,
+        width: size,
+        height: size,
+        borderRadius: size / 2,
+        backgroundColor: '#FDE047',
+        opacity: 0.9,
+      }}
+    />
+  );
+});
+
+/** Viên đạn: điểm tròn, hoặc vệt sáng dài cho súng liên thanh */
+const BulletView = React.memo(function BulletView({
+  x,
+  y,
+  vx,
+  vy,
+  radius: r,
+  look,
+}: {
+  x: number;
+  y: number;
+  vx: number;
+  vy: number;
+  radius: number;
+  look: 'normal' | 'tracer' | 'crit';
+}) {
+  if (look === 'normal') {
+    return <DotView x={x} y={y} size={r * 2} color="#FDE047" />;
+  }
+
+  // Vệt sáng: dài theo hướng bay, đạn chí mạng thì to và trắng hơn
+  const crit = look === 'crit';
+  const length = crit ? 22 : 16;
+  const thickness = crit ? r * 2.2 : r * 1.6;
+  return (
+    <View
+      pointerEvents="none"
+      style={{
+        position: 'absolute',
+        left: x,
+        top: y - thickness / 2,
+        width: length,
+        height: thickness,
+        borderRadius: thickness / 2,
+        backgroundColor: crit ? '#FFFFFF' : '#FDE047',
+        transform: [{ rotate: `${Math.atan2(vy, vx) + Math.PI}rad` }],
+        transformOrigin: 'left center',
+      }}
+    />
+  );
+});
+
 /** Số vàng nảy lên khi hạ zombie: "+$5" */
 const GoldPopView = React.memo(function GoldPopView({
   x,
@@ -211,6 +330,16 @@ function Joystick({ onMove }: { onMove: (x: number, y: number) => void }) {
       PanResponder.create({
         onStartShouldSetPanResponder: () => true,
         onMoveShouldSetPanResponder: () => true,
+        /*
+         * Ba dòng dưới là phần quyết định để VỪA CHẠY VỪA BẮN được bằng hai ngón.
+         * Mặc định, khi ngón thứ hai chạm vào nút BẮN, hệ responder của React
+         * Native có thể tước quyền của cần điều khiển — nhân vật đứng khựng lại
+         * giữa lúc đang chạy. Từ chối nhường quyền và không chặn responder gốc
+         * thì hai ngón hoạt động độc lập.
+         */
+        onPanResponderTerminationRequest: () => false,
+        onShouldBlockNativeResponder: () => false,
+        onMoveShouldSetPanResponderCapture: () => false,
         onPanResponderMove: (_event, gesture) => {
           const len = Math.hypot(gesture.dx, gesture.dy);
           // Kéo quá vành thì kẹp lại đúng vành, không cho núm chạy ra ngoài
@@ -501,6 +630,15 @@ export default function ZombieGame({ onExit }: { onExit: () => void }) {
     [flash],
   );
 
+  /** Đổi sang khẩu tiếp theo trong số đã mua */
+  const handleCycleWeapon = useCallback(() => {
+    const world = worldRef.current;
+    if (!world) return;
+    const next = cycleWeapon(world);
+    setFrame(snapshot(world));
+    flash(`Đang dùng ${WEAPONS[next].name}`);
+  }, [flash]);
+
   const handleWeaponPress = useCallback(
     (id: WeaponId) => {
       const world = worldRef.current;
@@ -559,8 +697,25 @@ export default function ZombieGame({ onExit }: { onExit: () => void }) {
                   hitFlash={z.hitFlash}
                 />
               ))}
+              {/* Tia ngắm vẽ TRƯỚC đạn để nằm dưới, không che vệt đạn */}
+              {frame.lockedTarget && (
+                <AimLine
+                  fromX={frame.player.x}
+                  fromY={frame.player.y}
+                  toX={frame.lockedTarget.x}
+                  toY={frame.lockedTarget.y}
+                />
+              )}
               {frame.bullets.map((b) => (
-                <DotView key={b.id} x={b.x} y={b.y} size={b.radius * 2} color="#FDE047" />
+                <BulletView
+                  key={b.id}
+                  x={b.x}
+                  y={b.y}
+                  vx={b.vx}
+                  vy={b.vy}
+                  radius={b.radius}
+                  look={b.look}
+                />
               ))}
               {frame.enemyBullets.map((b) => (
                 <DotView key={b.id} x={b.x} y={b.y} size={b.radius * 2} color="#F472B6" />
@@ -585,6 +740,16 @@ export default function ZombieGame({ onExit }: { onExit: () => void }) {
               >
                 <Text style={{ fontSize: frame.player.radius * 1.35 }}>🧑‍🚀</Text>
               </View>
+
+              {frame.player.muzzleFlash > 0 && (
+                <MuzzleFlash
+                  x={frame.player.x}
+                  y={frame.player.y}
+                  aimX={frame.player.aimX}
+                  aimY={frame.player.aimY}
+                  radius={frame.player.radius}
+                />
+              )}
 
               {/* Số vàng nảy lên, vẽ sau cùng để luôn nằm trên */}
               {frame.goldPops.map((g) => (
@@ -822,10 +987,72 @@ export default function ZombieGame({ onExit }: { onExit: () => void }) {
               />
             );
           })}
+
+          {/*
+            Ô súng chiếm CẢ HAI CỘT, đặt dưới 8 ô nâng cấp: khẩu đang dùng là
+            thông tin cần thấy thường xuyên, mà thanh súng nhỏ trong canvas chỉ
+            có biểu tượng nên không đọc được thông số.
+          */}
+          {frame && (
+            <Pressable
+              onPress={
+                frame.ownedWeapons.includes('minigun') || frame.ownedWeapons.length > 1
+                  ? handleCycleWeapon
+                  : () => handleWeaponPress('minigun')
+              }
+              accessibilityRole="button"
+              accessibilityLabel={
+                frame.ownedWeapons.length > 1
+                  ? `Đổi súng, đang dùng ${WEAPONS[frame.weapon].name}`
+                  : `Mua ${WEAPONS.minigun.name} giá ${WEAPONS.minigun.price} vàng`
+              }
+              style={({ pressed }) => [
+                styles.tile,
+                styles.weaponTile,
+                pressed && styles.tilePressed,
+              ]}
+            >
+              <View style={styles.tileHead}>
+                <Text style={styles.weaponTileEmoji}>{WEAPONS[frame.weapon].emoji}</Text>
+                <Text style={styles.weaponTileName} numberOfLines={1}>
+                  {WEAPONS[frame.weapon].name}
+                </Text>
+                <Text style={styles.weaponTileAction}>
+                  {frame.ownedWeapons.length > 1
+                    ? '🔄 ĐỔI SÚNG'
+                    : `🛒 MUA 💥 $${WEAPONS.minigun.price}`}
+                </Text>
+              </View>
+              <Text style={styles.tileDetail} numberOfLines={1}>
+                {Math.round(WEAPONS[frame.weapon].damage + frame.upgrades.damage * DAMAGE_STEP)} sát
+                thương · {Math.round(fireIntervalOf(frame) * 1000)}ms/viên ·{' '}
+                {WEAPONS[frame.weapon].pellets + frame.upgrades.multishot} viên/lượt
+                {WEAPONS[frame.weapon].critChance
+                  ? ` · ${Math.round((WEAPONS[frame.weapon].critChance ?? 0) * 100)}% chí mạng`
+                  : ''}
+                {' · '}đã có {frame.ownedWeapons.length}/{WEAPON_ORDER.length} khẩu
+              </Text>
+            </Pressable>
+          )}
         </View>
       </View>
     </GameShell>
   );
+}
+
+/**
+ * Khoảng nghỉ giữa hai phát, tính từ ảnh chụp khung hình.
+ * `fireInterval()` cần cả `world` nên không dùng trực tiếp ở phần vẽ được; ở đây
+ * tính lại từ đúng những số liệu mà Frame mang sang.
+ */
+function fireIntervalOf(frame: Frame): number {
+  const spec = WEAPONS[frame.weapon];
+  const base = Math.max(
+    MIN_FIRE_INTERVAL,
+    spec.interval - (frame.upgrades.fireRate * FIRE_RATE_STEP_MS) / 1000,
+  );
+  const hasFrenzy = frame.effects.some((e) => e.kind === 'frenzy');
+  return hasFrenzy ? Math.max(MIN_FIRE_INTERVAL / 2, base / 2) : base;
 }
 
 const styles = StyleSheet.create({
@@ -1073,4 +1300,15 @@ const styles = StyleSheet.create({
   tilePrice: { fontSize: 12, fontWeight: '800', color: '#94A3B8' },
   tilePriceReady: { color: '#FDE047' },
   tileDetail: { fontSize: 9, color: '#94A3B8' },
+
+  /** Ô súng: chiếm cả hai cột, viền tím để nổi khỏi nhóm ô nâng cấp */
+  weaponTile: {
+    width: '100%',
+    borderColor: '#A78BFA',
+    backgroundColor: '#2B2440',
+    opacity: 1,
+  },
+  weaponTileEmoji: { fontSize: 16 },
+  weaponTileName: { flex: 1, fontSize: 12, fontWeight: '800', color: '#F1F5F9' },
+  weaponTileAction: { fontSize: 10, fontWeight: '800', color: '#C4B5FD' },
 });
