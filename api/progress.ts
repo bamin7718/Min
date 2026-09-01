@@ -6,7 +6,12 @@ import {
   serverTursoConfig,
   writeProgress,
 } from '../lib/turso';
-import type { ProgressSyncPayload } from '../types';
+import {
+  EMPTY_WEEK_PROGRESS,
+  type ProgressSyncPayload,
+  type Subject,
+  type SubjectWeekProgress,
+} from '../types';
 
 /**
  * Đọc / ghi tiến độ của học sinh đang đăng nhập.
@@ -27,6 +32,19 @@ const JSON_HEADERS = {
 
 function json(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), { status, headers: JSON_HEADERS });
+}
+
+/** Chỉ nhận đúng ba môn đã biết, mỗi môn kẹp trong khoảng 0-35 */
+function parseWeeks(input: unknown): SubjectWeekProgress {
+  const result = { ...EMPTY_WEEK_PROGRESS };
+  if (typeof input !== 'object' || input === null) return result;
+
+  const raw = input as Record<string, unknown>;
+  for (const subject of Object.keys(result) as Subject[]) {
+    const value = Number(raw[subject]);
+    if (Number.isFinite(value)) result[subject] = Math.min(35, Math.max(0, Math.floor(value)));
+  }
+  return result;
 }
 
 /** Không tin gì từ client: kẹp mọi giá trị về khoảng hợp lệ */
@@ -55,7 +73,7 @@ function parsePayload(input: unknown): ProgressSyncPayload | null {
     totalPoints: toInt(raw.totalPoints, 10_000_000),
     accumulatedGameMinutes: toInt(raw.accumulatedGameMinutes, 100_000),
     masteredQuestionIds: ids,
-    highestCompletedWeek: toInt(raw.highestCompletedWeek, 35),
+    completedWeeks: parseWeeks(raw.completedWeeks),
     lastUpdated,
   };
 }

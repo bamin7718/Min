@@ -41,17 +41,89 @@ Sau đó:
 | `screens/games/ColorSortGame.tsx` | Giao diện trò chơi sắp xếp màu |
 | `screens/games/PenaltyGame.tsx` | Đá penalty: chọn 1 trong 6 góc sút, thủ môn đổ người ngẫu nhiên |
 | `screens/games/colorSortLogic.ts` | Logic thuần của trò sắp xếp màu (sinh đề, luật đi, điều kiện thắng) |
-| `screens/AuthScreen.tsx` | Đăng nhập/đăng ký, trạng thái đồng bộ, đăng xuất (mở từ khu vực phụ huynh) |
+| `screens/AuthScreen.tsx` | Đăng nhập/đăng ký, chọn vai trò, PIN phụ huynh |
+| `screens/SettingsScreen.tsx` | Cài đặt: tên, đổi PIN, khoá app, phiên bản, đăng xuất |
+| `screens/PinGate.tsx` | Màn hình nhập PIN dùng lại cho khoá app và khu vực phụ huynh |
+| `screens/UpdateModal.tsx` | Thông báo bản mới, hỗ trợ cập nhật bắt buộc |
+| `lib/updateChecker.ts` | `checkAppUpdate()` — so phiên bản với máy chủ |
+| `constants/version.ts` | `APP_VERSION` và hàm so sánh phiên bản |
+| `api/account.ts` | Đổi tên, kiểm tra và đổi mã PIN |
+| `api/version.ts` | Phiên bản mới nhất, đọc từ bảng `app_version` |
 | `types/index.ts` | `Question`, `UserProgress`, `QuizResult`, `Subject`, … |
-| `constants/mathCurriculum.ts` | Lộ trình Toán 35 tuần + 126 câu hỏi Toán + hàm tra tuần/trạng thái |
-| `constants/mockData.ts` | 40 câu Tiếng Việt + Tiếng Anh, hàm rút đề, hàm trộn lựa chọn, các hằng số cấu hình |
+| `constants/mathCurriculum.ts` | Lộ trình Toán 35 tuần + 126 câu |
+| `constants/vietnameseCurriculum.ts` | Lộ trình Tiếng Việt 35 tuần + 125 câu (Tập đọc / Luyện từ và câu / Chính tả) |
+| `constants/curriculum.ts` | Điểm truy cập chung cho mọi lộ trình theo tuần |
+| `lib/quizEngine.ts` | Rút đề ngẫu nhiên, trộn đáp án, dựng lại đúng đề cũ |
+| `constants/mockData.ts` | 20 câu Tiếng Anh, hàm rút đề, hàm trộn lựa chọn, các hằng số cấu hình |
 | `constants/theme.ts` | Bảng màu, khoảng cách, ngưỡng tablet |
-| `lib/supabase.ts` | Supabase Client — dùng cho Auth, và đồng bộ nếu không bật Turso |
 | `lib/turso.ts` | Tầng dữ liệu Turso (libSQL) — chỉ chạy phía server |
 | `lib/progressApi.ts` | Client gọi `api/progress`, app chỉ dùng `fetch` |
 | `lib/deviceId.ts` | Id thiết bị 128-bit dùng khi chưa đăng nhập |
 | `api/progress.ts` | Vercel Edge function giữ token Turso, GET/PUT tiến độ |
 | `db/schema.sql` | Schema Turso |
+
+## Hệ thiết kế (EdTech 2026)
+
+`constants/theme.ts` là nguồn duy nhất cho màu, bo góc, bóng đổ và cỡ vùng chạm.
+
+| Token | Giá trị | Dùng cho |
+| --- | --- | --- |
+| `colors.math` / `mathSoft` | `#0EA5E9` | Môn Toán |
+| `colors.vietnamese` / `Soft` | `#10B981` | Môn Tiếng Việt |
+| `colors.english` / `Soft` | `#8B5CF6` | Môn Tiếng Anh |
+| `colors.game` | `#7C3AED` | Góc Game |
+| `colors.reward` | `#F59E0B` | Điểm và phút thưởng |
+| `radius.md/lg/xl` | 16 / 20 / 28 | Bo góc mềm |
+| `touch.min` / `touch.primary` | 48 / 56 | Vùng chạm tối thiểu |
+| `elevation(1..3)` | shadow / elevation | Thẻ nổi |
+
+`touch.min = 48` không phải con số tuỳ hứng: học sinh 8 tuổi bấm chưa chính xác nên
+vùng chạm phải đạt tối thiểu 48dp theo hướng dẫn của Material.
+
+### Bố cục cố định
+
+```
+┌──────────────── Header cố định ────────────────┐
+│ Avatar · Xin chào [tên] · Badge · Chip phút · ⚙ │
+├────────────────────────────────────────────────┤
+│                                                │
+│           ScrollView cuộn ở giữa               │
+│                                                │
+├──── Tab nổi: Học Tập · Góc Game · Cài Đặt ─────┤
+└────────────────────────────────────────────────┘
+```
+
+Thanh tab dùng `position: absolute` với nền bán trong suốt (`colors.glass`) và bóng
+đổ, nên nội dung phải chừa `TAB_BAR_SPACE = 96` ở đáy — thiếu là dòng cuối bị khuất.
+
+> Không dùng blur thật: cần thêm `expo-blur` (native module) mà hiệu quả thị giác
+> gần như tương đương nền bán trong suốt + bóng đổ.
+
+### Phản hồi khi làm bài
+
+Đáp án đúng tô xanh, sai tô đỏ **kèm rung ngang** cả khối đáp án — học sinh nhận ra
+ngay mà chưa cần đọc chữ.
+
+## Bộ sinh đề (`lib/quizEngine.ts`)
+
+| Hàm | Tác dụng |
+| --- | --- |
+| `generateQuizForWeek(subject, week, mastered, count)` | Rút ngẫu nhiên tối đa 10 câu, ưu tiên câu chưa trả lời đúng, trộn đáp án |
+| `rebuildQuiz(session)` | Dựng lại **đúng bộ câu cũ**, chỉ trộn lại vị trí đáp án |
+| `bankSize(subject, week)` | Số câu trong ngân hàng của tuần |
+
+Màn kết quả có hai nút:
+- **ĐỔI ĐỀ MỚI** — rút bộ câu khác trong ngân hàng của tuần
+- **LÀM LẠI ĐỀ NÀY** — giữ nguyên bộ câu, xoá lựa chọn cũ, trộn lại vị trí đáp án
+
+### Chống cày phần thưởng
+
+`REPEAT_ANSWER_GIVES_POINTS` và `REPEAT_ANSWER_GIVES_MINUTES` đều `false`: chỉ câu
+đúng **lần đầu** mới sinh điểm và phút chơi game. Làm lại vẫn được luyện tập và vẫn
+thấy đúng/sai, nhưng không tạo thêm phần thưởng — nếu không, chỉ cần lặp một đề dễ
+là có giờ chơi vô hạn.
+
+Ngân hàng nhỏ hơn 10 câu thì engine lấy hết chứ **không lặp câu** để cho đủ số.
 
 ## Môn Toán — lộ trình 35 tuần
 
@@ -101,6 +173,56 @@ Mọi câu hỏi (cả ba môn) đều được trộn lại thứ tự A/B/C/D 
 rất khó phân bố đáp án đều — bản đầu của lộ trình Toán có đáp án **D chỉ xuất hiện
 3/125 lần**, học sinh hoàn toàn có thể đoán theo vị trí. Trộn khi tạo đề đưa phân bố
 về đều (lệch tối đa 2.8% so với 25%) và khiến làm lại cùng một câu không đoán được.
+
+## Môn Tiếng Việt — lộ trình 35 tuần
+
+Giống môn Toán, Tiếng Việt cũng đi theo **lộ trình 35 tuần**
+(`constants/vietnameseCurriculum.ts`), chia thành 5 giai đoạn:
+
+| Tuần | Giai đoạn |
+| --- | --- |
+| 1–4 | Mái trường em yêu |
+| 5–10 | Cộng đồng & Trái tim yêu thương |
+| 11–18 | Quê hương đất nước |
+| 19–27 | Nghệ thuật & Sáng tạo |
+| 28–35 | Trái Đất màu xanh & Ôn tập cuối năm |
+
+**125 câu**: tuần 1–10 có 5 câu, tuần 11–35 có 3 câu. Ba dạng bài, đánh dấu bằng
+trường `skill` và hiển thị thành nhãn cho học sinh:
+
+| Dạng | Số câu | Đặc điểm |
+| --- | --- | --- |
+| Luyện từ và câu | 83 | Từ loại, so sánh, nhân hoá, kiểu câu, dấu câu |
+| Chính tả | 31 | l/n, ch/tr, s/x, d/gi/r, iê/yê, dấu hỏi/ngã |
+| Tập đọc | 11 | Có `passage` — đoạn văn ngắn hiện phía trên câu hỏi |
+
+### Một lộ trình dùng chung cho mọi môn
+
+Trước đây tiến độ tuần là **một con số duy nhất dành cho Toán**
+(`highestCompletedWeek`). Thêm Tiếng Việt mà giữ cách đó thì mỗi môn mới lại phải
+thêm một cột trong DB, một field trong context và một nhánh `if` trong màn hình.
+
+Nên đã đổi thành map theo môn (`SubjectWeekProgress`) và gom mọi lộ trình vào
+`constants/curriculum.ts`:
+
+```ts
+getCurriculum(subject)      // lộ trình của môn, null nếu môn chưa có
+hasCurriculum(subject)      // môn này đi theo tuần hay rút đề ngẫu nhiên
+weekStatusFor(subject, week, completedWeeks)
+```
+
+`QuizScreen` không còn rẽ nhánh theo tên môn: môn nào `hasCurriculum` thì hiện màn
+chọn tuần, còn lại rút đề ngẫu nhiên. Thêm lộ trình Tiếng Anh sau này chỉ cần thêm
+một dòng vào `CURRICULUMS`.
+
+### Lưu tiến độ và đồng bộ
+
+- Local: `completedWeeks` nằm trong `StoredProgress`, lưu theo `userId`.
+- Turso: cột **`completed_weeks`** (JSON map) trong bảng `user_progress`. Cột
+  `completed_week` cũ vẫn được ghi bằng giá trị của môn Toán để dữ liệu cũ đọc được.
+- Migration tự chạy trong `initDatabase`: thêm cột mới rồi chuyển giá trị Toán cũ
+  sang map bằng `'{"Toán":' || completed_week || '}'` (nối chuỗi thay vì
+  `json_object()` để không phụ thuộc phần mở rộng JSON của SQLite).
 
 ## Góc Game — 3 trò chơi tích hợp
 
@@ -267,6 +389,72 @@ create policy "own progress" on public.user_progress
 create policy "own results" on public.quiz_results
   for all using (auth.uid() = user_id) with check (auth.uid() = user_id);
 ```
+
+## Phân quyền theo vai trò
+
+| Khu vực | Học sinh | Phụ huynh |
+| --- | --- | --- |
+| Học tập, Góc Game, 3 trò chơi | ✅ | ✅ |
+| Khu vực "Phụ huynh cấp thêm giờ" | **Không render** | ✅ (cần PIN) |
+| Mục đổi mã PIN trong Cài đặt | **Không render** | ✅ |
+| Mục khoá ứng dụng | **Không render** | ✅ |
+| Đổi tên, xem phiên bản, đăng xuất | ✅ | ✅ |
+
+Với học sinh, khu vực phụ huynh **không được render** chứ không phải ẩn bằng style —
+không có ô PIN nào tồn tại trong cây component để dò ra.
+
+### Mã PIN
+
+PIN được **xác thực ở server** (`/api/account?action=verify-pin`), băm bằng PBKDF2
+giống mật khẩu. App không giữ PIN nên không thể đọc từ bundle.
+
+> **Đánh đổi:** kiểm tra PIN **cần có mạng**. Trước đây PIN so với hằng số `'1234'`
+> ngay trong app nên chạy offline, nhưng hằng số đó nằm trong bundle công khai —
+> ai xem mã nguồn cũng biết. Đổi lấy: không đọc trộm được PIN, không brute-force
+> offline được; bù lại phụ huynh cần mạng khi cấp thêm giờ.
+
+Sau lần nhập đúng đầu tiên, trạng thái mở khoá được giữ **trong bộ nhớ** cho tới khi
+đóng app, nên không phải nhập lại liên tục. Mở lại app là phải nhập lại.
+
+### Khoá ứng dụng
+
+Tuỳ chọn trong Cài đặt (mặc định **tắt**). Bật lên thì mỗi lần mở app đều hỏi PIN —
+kể cả khi con muốn vào học, nên chỉ hợp khi máy dùng chung.
+
+## Phiên bản và tự kiểm tra cập nhật
+
+Phiên bản hiện tại: **v1.0.1** (`constants/version.ts`, `app.json`, `package.json`).
+Hiện ở chân màn hình Đăng nhập và trong mục Cài đặt.
+
+### Luồng
+
+1. Ngay khi có phiên đăng nhập (đăng nhập mới hoặc mở app đã có session),
+   `checkAppUpdate()` chạy **ngầm** — hỏng cũng không chặn app.
+2. Có bản mới hơn → hiện modal *"Đã có bản cập nhật mới (vX.Y.Z)!"* kèm
+   `release_notes` và nút **Tải về & Cập nhật ngay** (`Linking.openURL(apkUrl)`).
+3. `force_update = true` → **khoá hẳn**, không vào được app cho tới khi tải bản mới.
+4. Nút **Kiểm tra bản cập nhật** trong Cài đặt cho phép kiểm tra thủ công; đang mới
+   nhất thì báo *"Bạn đang sử dụng phiên bản mới nhất!"*.
+
+### Nguồn dữ liệu
+
+Theo thứ tự ưu tiên: `EXPO_PUBLIC_UPDATE_SERVER_URL` → `<API>/api/version` (bảng
+`app_version` trên Turso). JSON nhận cả `snake_case` lẫn `camelCase`:
+
+```json
+{ "version": "1.0.2", "apk_url": "https://...", "force_update": false, "release_notes": "..." }
+```
+
+Phát hành bản mới:
+
+```bash
+turso db shell min-bamin7718 \
+  "UPDATE app_version SET version='1.0.2', apk_url='https://.../app.apk', release_notes='Thêm game Đá Penalty' WHERE id=1"
+```
+
+So sánh phiên bản theo **số từng phần** chứ không so chuỗi — nếu so chuỗi thì
+`1.0.10` lại bị coi là cũ hơn `1.0.9`. Server báo phiên bản **cũ hơn** thì app im
+lặng, không làm phiền.
 
 ## Kiến trúc Offline-First
 

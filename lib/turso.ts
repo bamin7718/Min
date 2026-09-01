@@ -3,7 +3,13 @@
 // `libsql` nên không bundle được cho app.
 import { createClient, type Client } from '@libsql/client/web';
 
-import type { ProgressSyncPayload, UserRole } from '../types';
+import {
+  EMPTY_WEEK_PROGRESS,
+  type ProgressSyncPayload,
+  type Subject,
+  type SubjectWeekProgress,
+  type UserRole,
+} from '../types';
 
 /**
  * Tầng truy cập Turso (libSQL).
@@ -106,9 +112,34 @@ async function migrateUserProgress(client: Client): Promise<void> {
   );
 }
 
+/**
+ * Thêm cột `completed_weeks` (JSON map môn -> tuần) cho bảng đã tồn tại.
+ *
+ * Trước đây chỉ có `completed_week` là một số nguyên dành riêng cho môn Toán.
+ * Khi thêm lộ trình Tiếng Việt thì cần map theo môn, nhưng vẫn giữ cột cũ để
+ * dữ liệu Toán đã lưu không mất.
+ */
+async function migrateCompletedWeeks(client: Client): Promise<void> {
+  const columns = await tableColumns(client, 'user_progress');
+  if (columns.size === 0 || columns.has('completed_weeks')) return;
+
+  await client.batch(
+    [
+      `ALTER TABLE user_progress ADD COLUMN completed_weeks TEXT NOT NULL DEFAULT '{}'`,
+      // Chuyển giá trị Toán cũ sang map. Nối chuỗi thay vì dùng json_object()
+      // để không phụ thuộc phần mở rộng JSON của SQLite.
+      `UPDATE user_progress
+          SET completed_weeks = '{"Toán":' || COALESCE(completed_week, 0) || '}'
+        WHERE completed_weeks = '{}'`,
+    ],
+    'write',
+  );
+}
+
 /** Tạo toàn bộ bảng nếu chưa có, và nâng cấp bảng cũ. An toàn khi gọi nhiều lần. */
 export async function initDatabase(client: Client): Promise<void> {
   await migrateUserProgress(client);
+  await migrateCompletedWeeks(client);
 
   await client.batch(
     [
@@ -128,6 +159,7 @@ export async function initDatabase(client: Client): Promise<void> {
          total_points             INTEGER NOT NULL DEFAULT 0,
          accumulated_game_minutes INTEGER NOT NULL DEFAULT 0,
          mastered_question_ids    TEXT NOT NULL DEFAULT '[]',
+         completed_weeks          TEXT NOT NULL DEFAULT '{}',
          updated_at               TEXT NOT NULL,
          UNIQUE (user_id, subject)
        )`,
@@ -150,6 +182,19 @@ export async function initDatabase(client: Client): Promise<void> {
        )`,
       `CREATE INDEX IF NOT EXISTS idx_quiz_results_user
          ON quiz_results (user_id, completed_at DESC)`,
+      // Một dòng duy nhất (id = 1) mô tả bản phát hành mới nhất
+      `CREATE TABLE IF NOT EXISTS app_version (
+         id            INTEGER PRIMARY KEY CHECK (id = 1),
+         version       TEXT NOT NULL,
+         apk_url       TEXT NOT NULL DEFAULT '',
+         force_update  INTEGER NOT NULL DEFAULT 0,
+         release_notes TEXT NOT NULL DEFAULT '',
+         updated_at    TEXT NOT NULL
+       )`,
+      // Khai phiên bản hiện tại nếu bảng còn trống. Dùng INSERT OR IGNORE để
+      // không ghi đè giá trị mà người quản trị đã đặt.
+      `INSERT OR IGNORE INTO app_version (id, version, apk_url, force_update, release_notes, updated_at)
+       VALUES (1, '1.0.1', '', 0, '', datetime('now'))`,
     ],
     'write',
   );
@@ -244,8 +289,8 @@ export async function createUser(
         {
           sql: `INSERT INTO user_progress (
                   id, user_id, subject, completed_week, total_points,
-                  accumulated_game_minutes, mastered_question_ids, updated_at
-                ) VALUES (?, ?, 'chung', 0, 0, 0, '[]', ?)`,
+                  accumulated_game_minutes, mastered_question_ids, completed_weeks, updated_at
+                ) VALUES (?, ?, 'chung', 0, 0, 0, '[]', '{}', ?)`,
           args: [progressId, user.id, now],
         },
       ],
@@ -261,9 +306,60 @@ export async function createUser(
   }
 }
 
+/**
+ * Đổi tên đăng nhập. Trả về `false` nếu tên mới đã có người dùng.
+ * Luôn ràng buộc `WHERE id = ?` để không sửa nhầm tài khoản khác.
+ */
+export async function updateUsername(
+  client: Client,
+  userId: string,
+  username: string,
+): Promise<boolean> {
+  try {
+    await client.execute({
+      sql: 'UPDATE users SET username = ? WHERE id = ?',
+      args: [username, userId],
+    });
+    return true;
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    if (/UNIQUE constraint failed/i.test(message)) return false;
+    throw error;
+  }
+}
+
+/** Cập nhật mã PIN (đã băm) của phụ huynh */
+export async function updatePinHash(
+  client: Client,
+  userId: string,
+  pinHash: string,
+): Promise<void> {
+  await client.execute({
+    sql: 'UPDATE users SET pin_code = ? WHERE id = ?',
+    args: [pinHash, userId],
+  });
+}
+
 /* ------------------------------------------------------------------ */
 /* Bảng user_progress — luôn ràng buộc theo user_id                    */
 /* ------------------------------------------------------------------ */
+
+/** Đọc map tiến độ tuần từ JSON đã lưu, luôn trả đủ ba môn */
+function parseWeeks(value: unknown): SubjectWeekProgress {
+  const result = { ...EMPTY_WEEK_PROGRESS };
+  if (typeof value !== 'string') return result;
+
+  try {
+    const parsed = JSON.parse(value) as Record<string, unknown>;
+    for (const subject of Object.keys(result) as Subject[]) {
+      const n = Number(parsed[subject]);
+      if (Number.isFinite(n)) result[subject] = Math.min(35, Math.max(0, Math.floor(n)));
+    }
+  } catch {
+    // JSON hỏng thì coi như chưa có tiến độ, không làm sập cả luồng đọc
+  }
+  return result;
+}
 
 function parseIdList(value: unknown): string[] {
   if (typeof value !== 'string') return [];
@@ -282,7 +378,7 @@ export async function readProgress(
 ): Promise<ProgressSyncPayload | null> {
   const result = await client.execute({
     sql: `SELECT total_points, accumulated_game_minutes, mastered_question_ids,
-                 completed_week, updated_at
+                 completed_weeks, updated_at
             FROM user_progress
            WHERE user_id = ? AND subject = 'chung'`,
     args: [userId],
@@ -295,7 +391,7 @@ export async function readProgress(
     totalPoints: toInt(row.total_points),
     accumulatedGameMinutes: toInt(row.accumulated_game_minutes),
     masteredQuestionIds: parseIdList(row.mastered_question_ids),
-    highestCompletedWeek: toInt(row.completed_week),
+    completedWeeks: parseWeeks(row.completed_weeks),
     lastUpdated: String(row.updated_at),
   };
 }
@@ -310,10 +406,11 @@ export async function writeProgress(
   await client.execute({
     sql: `INSERT INTO user_progress (
             id, user_id, subject, completed_week, total_points,
-            accumulated_game_minutes, mastered_question_ids, updated_at
-          ) VALUES (?, ?, 'chung', ?, ?, ?, ?, ?)
+            accumulated_game_minutes, mastered_question_ids, completed_weeks, updated_at
+          ) VALUES (?, ?, 'chung', ?, ?, ?, ?, ?, ?)
           ON CONFLICT(user_id, subject) DO UPDATE SET
             completed_week = excluded.completed_week,
+            completed_weeks = excluded.completed_weeks,
             total_points = excluded.total_points,
             accumulated_game_minutes = excluded.accumulated_game_minutes,
             mastered_question_ids = excluded.mastered_question_ids,
@@ -322,10 +419,12 @@ export async function writeProgress(
     args: [
       progressId,
       userId,
-      Math.max(0, Math.floor(progress.highestCompletedWeek)),
+      // Giữ cột cũ đồng bộ với môn Toán để dữ liệu cũ vẫn đọc được
+      Math.max(0, Math.floor(progress.completedWeeks['Toán'] ?? 0)),
       Math.max(0, Math.floor(progress.totalPoints)),
       Math.max(0, Math.floor(progress.accumulatedGameMinutes)),
       JSON.stringify(progress.masteredQuestionIds),
+      JSON.stringify(progress.completedWeeks),
       progress.lastUpdated,
       userId,
     ],

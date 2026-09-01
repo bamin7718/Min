@@ -41,3 +41,6 @@ yarn-error.*
 # generated native folders
 /ios
 /android
+
+# Thư mục tạm do tsc tạo ra khi chạy kiểm thử (không phải mã nguồn)
+.tsout-*/

@@ -1,5 +1,6 @@
 import type { Question, Subject, SubjectInfo } from '../types';
 import { MATH_QUESTIONS } from './mathCurriculum';
+import { VIETNAMESE_QUESTIONS } from './vietnameseCurriculum';
 import { colors } from './theme';
 
 /** Điểm thưởng cho mỗi câu trả lời đúng */
@@ -12,13 +13,14 @@ export const POINTS_PER_CORRECT = 10;
 export const QUESTIONS_PER_QUIZ = 6;
 
 /**
- * Câu đã từng trả lời đúng thì lần sau chỉ cộng điểm, không cộng thêm phút chơi game.
- * Đổi thành `true` nếu muốn cộng phút mỗi lần trả lời đúng (kể cả làm lại).
+ * Câu đã từng trả lời đúng thì lần sau KHÔNG cộng gì thêm — cả điểm lẫn phút.
+ *
+ * Đây là chốt chặn chống "cày" phần thưởng: không có nó, học sinh chỉ cần làm
+ * đi làm lại một đề dễ là có phút chơi game vô hạn. Làm lại vẫn được luyện tập
+ * và vẫn thấy đúng/sai, chỉ là không sinh thêm phần thưởng.
  */
 export const REPEAT_ANSWER_GIVES_MINUTES = false;
-
-/** Mã PIN mặc định của phụ huynh */
-export const DEFAULT_PARENT_PIN = '1234';
+export const REPEAT_ANSWER_GIVES_POINTS = false;
 
 /** Các mốc phút phụ huynh có thể cấp thêm nhanh */
 export const PARENT_GRANT_OPTIONS = [5, 10, 15, 30] as const;
@@ -32,238 +34,37 @@ export const SUBJECTS: SubjectInfo[] = [
     key: 'Toán',
     emoji: '🔢',
     description: 'Nhân chia, giải toán có lời văn, hình học và đơn vị đo',
-    color: colors.primary,
-    softColor: colors.primarySoft,
+    color: colors.math,
+    softColor: colors.mathSoft,
   },
   {
     key: 'Tiếng Việt',
     emoji: '📖',
     description: 'Chính tả, từ loại, mẫu câu, so sánh và nhân hoá',
-    color: colors.success,
-    softColor: colors.successSoft,
+    color: colors.vietnamese,
+    softColor: colors.vietnameseSoft,
   },
   {
     key: 'Tiếng Anh',
     emoji: '🌏',
     description: 'Từ vựng và câu giao tiếp đơn giản',
-    color: colors.purple,
-    softColor: colors.purpleSoft,
+    color: colors.english,
+    softColor: colors.englishSoft,
   },
 ];
 
 /**
- * Câu hỏi Tiếng Việt và Tiếng Anh — 20 câu mỗi môn.
+ * Câu hỏi Tiếng Anh — môn duy nhất chưa tổ chức theo tuần nên vẫn rút đề
+ * ngẫu nhiên.
  *
- * Câu hỏi Toán KHÔNG nằm ở đây: môn Toán được tổ chức theo lộ trình 35 tuần
- * trong `constants/mathCurriculum.ts` để tránh có hai nguồn dữ liệu trùng id.
+ * Toán và Tiếng Việt KHÔNG nằm ở đây: hai môn đó theo lộ trình 35 tuần trong
+ * `mathCurriculum.ts` và `vietnameseCurriculum.ts`, để tránh hai nguồn dữ liệu
+ * trùng id.
  *
  * LƯU Ý: không đổi `id` của câu đã có, vì `masteredQuestionIds` lưu trong
  * AsyncStorage/Supabase tham chiếu tới các id này.
  */
 const LANGUAGE_QUESTIONS: Question[] = [
-  /* ==================== TIẾNG VIỆT ==================== */
-  {
-    id: 'tv-01',
-    subject: 'Tiếng Việt',
-    content: 'Từ nào dưới đây là từ chỉ hoạt động?',
-    options: ['bàn ghế', 'chạy nhảy', 'xinh đẹp', 'con mèo'],
-    correctAnswer: 1,
-    rewardMinutes: 2,
-    explanation:
-      '"chạy nhảy" chỉ hoạt động. "bàn ghế", "con mèo" chỉ sự vật; "xinh đẹp" chỉ đặc điểm.',
-  },
-  {
-    id: 'tv-02',
-    subject: 'Tiếng Việt',
-    content: 'Từ nào dưới đây viết ĐÚNG chính tả?',
-    options: ['xanh xao', 'sanh sao', 'xanh sao', 'sanh xao'],
-    correctAnswer: 0,
-    rewardMinutes: 2,
-    explanation: 'Viết đúng là "xanh xao" (cả hai tiếng đều bắt đầu bằng "x").',
-  },
-  {
-    id: 'tv-03',
-    subject: 'Tiếng Việt',
-    content: 'Câu "Bạn Lan đang tưới cây." thuộc mẫu câu nào?',
-    options: ['Ai là gì?', 'Ai làm gì?', 'Ai thế nào?', 'Ở đâu?'],
-    correctAnswer: 1,
-    rewardMinutes: 3,
-    explanation:
-      '"Bạn Lan" trả lời cho câu hỏi "Ai?", "đang tưới cây" trả lời cho "làm gì?".',
-  },
-  {
-    id: 'tv-04',
-    subject: 'Tiếng Việt',
-    content: 'Từ nào TRÁI NGHĨA với từ "siêng năng"?',
-    options: ['chăm chỉ', 'cần mẫn', 'lười biếng', 'nhanh nhẹn'],
-    correctAnswer: 2,
-    rewardMinutes: 2,
-    explanation:
-      '"lười biếng" trái nghĩa với "siêng năng". "chăm chỉ" và "cần mẫn" lại cùng nghĩa.',
-  },
-  {
-    id: 'tv-05',
-    subject: 'Tiếng Việt',
-    content: 'Từ nào dưới đây là từ chỉ đặc điểm?',
-    options: ['học sinh', 'tròn xoe', 'đọc sách', 'cái bút'],
-    correctAnswer: 1,
-    rewardMinutes: 2,
-    explanation:
-      '"tròn xoe" chỉ đặc điểm (hình dáng). "học sinh", "cái bút" chỉ sự vật; "đọc sách" chỉ hoạt động.',
-  },
-  {
-    id: 'tv-06',
-    subject: 'Tiếng Việt',
-    content: 'Từ nào dưới đây là từ chỉ sự vật?',
-    options: ['viết bài', 'xanh tươi', 'chạy nhanh', 'quyển vở'],
-    correctAnswer: 3,
-    rewardMinutes: 2,
-    explanation: '"quyển vở" là đồ vật nên là từ chỉ sự vật.',
-  },
-  {
-    id: 'tv-07',
-    subject: 'Tiếng Việt',
-    content: 'Câu "Mẹ em là giáo viên." thuộc mẫu câu nào?',
-    options: ['Ai là gì?', 'Ai làm gì?', 'Ai thế nào?', 'Ở đâu?'],
-    correctAnswer: 0,
-    rewardMinutes: 2,
-    explanation: 'Có từ "là" và giới thiệu về nghề nghiệp nên thuộc mẫu "Ai là gì?".',
-  },
-  {
-    id: 'tv-08',
-    subject: 'Tiếng Việt',
-    content: 'Câu "Bầu trời rất trong xanh." thuộc mẫu câu nào?',
-    options: ['Ai làm gì?', 'Ai là gì?', 'Ai thế nào?', 'Khi nào?'],
-    correctAnswer: 2,
-    rewardMinutes: 2,
-    explanation:
-      '"rất trong xanh" nói về đặc điểm của bầu trời nên thuộc mẫu "Ai thế nào?".',
-  },
-  {
-    id: 'tv-09',
-    subject: 'Tiếng Việt',
-    content: 'Từ nào dưới đây viết ĐÚNG chính tả?',
-    options: ['no lắng', 'lo nắng', 'lo lắng', 'no nắng'],
-    correctAnswer: 2,
-    rewardMinutes: 2,
-    explanation: 'Viết đúng là "lo lắng" — cả hai tiếng đều bắt đầu bằng "l".',
-  },
-  {
-    id: 'tv-10',
-    subject: 'Tiếng Việt',
-    content: 'Từ nào dưới đây viết ĐÚNG chính tả?',
-    options: ['che chở', 'tre chở', 'che trở', 'tre trở'],
-    correctAnswer: 0,
-    rewardMinutes: 2,
-    explanation: 'Viết đúng là "che chở" (nghĩa là bảo vệ, giúp đỡ).',
-  },
-  {
-    id: 'tv-11',
-    subject: 'Tiếng Việt',
-    content: 'Từ nào dưới đây viết ĐÚNG chính tả?',
-    options: ['suy nghỉ', 'suy nghĩ', 'suy nghi', 'suy nghịt'],
-    correctAnswer: 1,
-    rewardMinutes: 3,
-    explanation: 'Viết đúng là "suy nghĩ" (dấu ngã). "nghỉ" (dấu hỏi) là nghỉ ngơi.',
-  },
-  {
-    id: 'tv-12',
-    subject: 'Tiếng Việt',
-    content:
-      'Trong câu "Mắt em bé sáng như ngôi sao.", sự vật nào được so sánh với ngôi sao?',
-    options: ['em bé', 'ngôi sao', 'ánh sáng', 'mắt em bé'],
-    correctAnswer: 3,
-    rewardMinutes: 3,
-    explanation:
-      '"Mắt em bé" được so sánh với "ngôi sao" qua từ so sánh "như".',
-  },
-  {
-    id: 'tv-13',
-    subject: 'Tiếng Việt',
-    content: 'Câu nào dưới đây có dùng biện pháp NHÂN HOÁ?',
-    options: [
-      'Trời rất tối.',
-      'Mây có màu xám.',
-      'Ông trời mặc áo giáp đen ra trận.',
-      'Mưa rơi rất to.',
-    ],
-    correctAnswer: 2,
-    rewardMinutes: 3,
-    explanation:
-      'Trời được gọi là "ông" và biết "mặc áo giáp ra trận" như người — đó là nhân hoá.',
-  },
-  {
-    id: 'tv-14',
-    subject: 'Tiếng Việt',
-    content: 'Cuối câu kể "Em rất thích đọc truyện" cần đặt dấu câu nào?',
-    options: ['dấu chấm', 'dấu chấm hỏi', 'dấu chấm than', 'dấu phẩy'],
-    correctAnswer: 0,
-    rewardMinutes: 2,
-    explanation: 'Câu kể thì kết thúc bằng dấu chấm.',
-  },
-  {
-    id: 'tv-15',
-    subject: 'Tiếng Việt',
-    content: 'Câu "Vì trời mưa nên em không đi chơi." trả lời cho câu hỏi nào?',
-    options: ['Ở đâu?', 'Khi nào?', 'Bằng gì?', 'Vì sao?'],
-    correctAnswer: 3,
-    rewardMinutes: 3,
-    explanation: 'Bộ phận "Vì trời mưa" nêu lí do nên trả lời cho câu hỏi "Vì sao?".',
-  },
-  {
-    id: 'tv-16',
-    subject: 'Tiếng Việt',
-    content: 'Từ nào dưới đây CÙNG NGHĨA với từ "to"?',
-    options: ['nhỏ', 'bé', 'lớn', 'thấp'],
-    correctAnswer: 2,
-    rewardMinutes: 2,
-    explanation: '"lớn" cùng nghĩa với "to". "nhỏ" và "bé" là trái nghĩa.',
-  },
-  {
-    id: 'tv-17',
-    subject: 'Tiếng Việt',
-    content:
-      'Trong câu "Các bạn học sinh chơi bóng ở sân trường.", bộ phận nào trả lời cho câu hỏi "Ở đâu?"',
-    options: ['Các bạn học sinh', 'ở sân trường', 'chơi bóng', 'bóng'],
-    correctAnswer: 1,
-    rewardMinutes: 3,
-    explanation: '"ở sân trường" chỉ địa điểm nên trả lời cho câu hỏi "Ở đâu?".',
-  },
-  {
-    id: 'tv-18',
-    subject: 'Tiếng Việt',
-    content: 'Từ nào dưới đây viết ĐÚNG chính tả?',
-    options: ['dúp đỡ', 'giúp đở', 'giúp đỡ', 'rúp đỡ'],
-    correctAnswer: 2,
-    rewardMinutes: 2,
-    explanation: 'Viết đúng là "giúp đỡ" — "gi" và dấu ngã ở tiếng "đỡ".',
-  },
-  {
-    id: 'tv-19',
-    subject: 'Tiếng Việt',
-    content: 'Từ nào KHÔNG cùng nhóm với các từ còn lại?',
-    options: ['bàn', 'ghế', 'chạy', 'tủ'],
-    correctAnswer: 2,
-    rewardMinutes: 2,
-    explanation:
-      '"bàn", "ghế", "tủ" đều chỉ đồ vật; còn "chạy" chỉ hoạt động nên khác nhóm.',
-  },
-  {
-    id: 'tv-20',
-    subject: 'Tiếng Việt',
-    content:
-      'Trong câu: Bạn Nam nói: "Mình rất thích môn Toán." — dấu hai chấm dùng để làm gì?',
-    options: [
-      'báo hiệu lời nói của nhân vật',
-      'kết thúc câu kể',
-      'ngăn cách các từ cùng loại',
-      'dùng để hỏi',
-    ],
-    correctAnswer: 0,
-    rewardMinutes: 3,
-    explanation: 'Dấu hai chấm ở đây báo hiệu phần tiếp theo là lời nói của bạn Nam.',
-  },
-
   /* ==================== TIẾNG ANH ==================== */
   {
     id: 'ta-01',
@@ -458,7 +259,11 @@ const LANGUAGE_QUESTIONS: Question[] = [
 ];
 
 /** Toàn bộ câu hỏi của cả ba môn */
-export const QUESTIONS: Question[] = [...MATH_QUESTIONS, ...LANGUAGE_QUESTIONS];
+export const QUESTIONS: Question[] = [
+  ...MATH_QUESTIONS,
+  ...VIETNAMESE_QUESTIONS,
+  ...LANGUAGE_QUESTIONS,
+];
 
 /** Lấy toàn bộ câu hỏi của một môn học */
 export function getQuestionsBySubject(subject: Subject): Question[] {

@@ -33,6 +33,13 @@ export interface Question {
   rewardMinutes: number;
   /** Lời giải thích ngắn, hiện ra sau khi học sinh trả lời */
   explanation?: string;
+  /**
+   * Đoạn văn ngắn hiển thị phía trên câu hỏi.
+   * Dùng cho dạng bài Tập đọc — Hiểu văn bản của môn Tiếng Việt.
+   */
+  passage?: string;
+  /** Nhãn dạng bài, ví dụ "Luyện từ và câu", để hiển thị cho học sinh */
+  skill?: string;
 }
 
 /** Kết quả một lần trả lời của học sinh */
@@ -80,8 +87,8 @@ export interface StoredProgress {
   availableSeconds: number;
   /** Danh sách id các câu đã từng trả lời đúng */
   masteredQuestionIds: string[];
-  /** Tuần Toán cao nhất đã vượt qua trong lộ trình 35 tuần (0 = chưa qua tuần nào) */
-  highestCompletedWeek: number;
+  /** Tuần cao nhất đã vượt qua của từng môn */
+  completedWeeks: SubjectWeekProgress;
   lastUpdated: string;
 }
 
@@ -91,8 +98,8 @@ export interface StoredProgress {
  */
 export interface ProgressSyncPayload extends UserProgress {
   masteredQuestionIds: string[];
-  /** Tuần Toán cao nhất đã vượt qua, để tiến độ lộ trình đồng bộ được */
-  highestCompletedWeek: number;
+  /** Tuần cao nhất đã vượt qua của từng môn */
+  completedWeeks: SubjectWeekProgress;
 }
 
 /** Trạng thái đồng bộ hiển thị cho phụ huynh */
@@ -127,6 +134,21 @@ export interface AuthSession extends SessionUser {
   token: string;
 }
 
+/**
+ * Tuần cao nhất đã vượt qua của TỪNG môn.
+ *
+ * Dùng map thay vì một con số riêng cho mỗi môn: thêm lộ trình cho môn mới chỉ
+ * cần thêm khoá, không phải sửa schema, context và màn hình như trước.
+ */
+export type SubjectWeekProgress = Record<Subject, number>;
+
+/** Giá trị khởi tạo: chưa môn nào qua tuần nào */
+export const EMPTY_WEEK_PROGRESS: SubjectWeekProgress = {
+  'Toán': 0,
+  'Tiếng Việt': 0,
+  'Tiếng Anh': 0,
+};
+
 /** Trạng thái của một tuần học trên màn hình chọn tuần */
 export type WeekStatus = 'completed' | 'current' | 'locked';
 
@@ -135,6 +157,8 @@ export type WeekStatus = 'completed' | 'current' | 'locked';
  * Xem dữ liệu tại `constants/mathCurriculum.ts`.
  */
 export interface WeekTopic {
+  /** Môn học của lộ trình chứa tuần này */
+  subject: Subject;
   /** Số tuần, từ 1 đến 35 */
   weekNumber: number;
   /** Tên bài học của tuần */
@@ -164,4 +188,5 @@ export interface GameInfo {
 export type RootTabParamList = {
   HocTap: undefined;
   GocGame: undefined;
+  CaiDat: undefined;
 };

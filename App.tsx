@@ -2,12 +2,13 @@ import { Ionicons } from '@expo/vector-icons';
 import { Asset } from 'expo-asset';
 import * as Font from 'expo-font';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
-import { NavigationContainer } from '@react-navigation/native';
+import { NavigationContainer, useNavigation } from '@react-navigation/native';
+import type { BottomTabNavigationProp } from '@react-navigation/bottom-tabs';
 import { StatusBar } from 'expo-status-bar';
 import React, { useCallback, useEffect, useState } from 'react';
 import {
   ActivityIndicator,
-  Alert,
+  Modal,
   Platform,
   Pressable,
   StyleSheet,
@@ -16,10 +17,15 @@ import {
 } from 'react-native';
 import { SafeAreaProvider, useSafeAreaInsets } from 'react-native-safe-area-context';
 
-import { colors, radius, spacing } from './constants/theme';
+import { colors, elevation, radius, spacing, touch } from './constants/theme';
+import { APP_VERSION } from './constants/version';
+import { checkAppUpdate, type UpdateInfo } from './lib/updateChecker';
 import { AuthProvider, useAuth } from './context/AuthContext';
 import { PlaytimeProvider, usePlaytime } from './context/PlaytimeContext';
 import AuthScreen from './screens/AuthScreen';
+import PinGate from './screens/PinGate';
+import { SettingsWithPinGate } from './screens/SettingsScreen';
+import UpdateModal from './screens/UpdateModal';
 import GameVaultScreen from './screens/GameVaultScreen';
 import QuizScreen from './screens/QuizScreen';
 import type { RootTabParamList } from './types';
@@ -106,24 +112,86 @@ export default function App() {
 
 /** Chưa đăng nhập thì hiện AuthScreen, đã đăng nhập thì hiện Bottom Tabs */
 function RootRouter({ assetsReady }: { assetsReady: boolean }) {
-  const { initializing, session } = useAuth();
+  const { initializing, session, appLockEnabled, pinUnlocked } = useAuth();
+
+  /**
+   * Tự kiểm tra bản mới ngay khi có phiên đăng nhập — bao gồm cả lần đăng nhập
+   * mới lẫn lần mở app đã có sẵn session.
+   */
+  const [update, setUpdate] = useState<UpdateInfo | null>(null);
+  const [dismissed, setDismissed] = useState(false);
+
+  useEffect(() => {
+    if (!session) {
+      setUpdate(null);
+      setDismissed(false);
+      return;
+    }
+
+    let cancelled = false;
+    // Không await ở chỗ render: kiểm tra chạy ngầm, hỏng cũng không chặn app
+    checkAppUpdate().then((result) => {
+      if (!cancelled && result.status === 'update-available' && result.latest) {
+        setUpdate(result.latest);
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [session]);
 
   if (initializing || !assetsReady) {
     return <SplashScreen label="Đang mở ứng dụng..." />;
   }
   if (!session) return <AuthScreen />;
 
-  return <MainTabs />;
+  // Cập nhật bắt buộc: chặn hẳn, không cho vào app
+  if (update?.forceUpdate) {
+    return <UpdateModal info={update} currentVersion={APP_VERSION} />;
+  }
+
+  // Khoá ứng dụng: chỉ áp dụng khi phụ huynh bật, và chỉ họ mở được
+  if (appLockEnabled && session.role === 'parent' && !pinUnlocked) {
+    return (
+      <PinGate
+        title="Ứng dụng đang khoá"
+        description="Nhập mã PIN phụ huynh để tiếp tục."
+      />
+    );
+  }
+
+  return (
+    <>
+      <MainTabs />
+
+      {/* Cập nhật không bắt buộc: hiện một lần, cho phép để sau */}
+      <Modal
+        visible={update !== null && !dismissed}
+        animationType="slide"
+        presentationStyle="fullScreen"
+        onRequestClose={() => setDismissed(true)}
+      >
+        {update && (
+          <UpdateModal
+            info={update}
+            currentVersion={APP_VERSION}
+            onDismiss={() => setDismissed(true)}
+          />
+        )}
+      </Modal>
+    </>
+  );
 }
 
 function MainTabs() {
   const { availableMinutes } = usePlaytime();
+  const [showSettings, setShowSettings] = useState(false);
 
   // KHÔNG chặn ở đây nữa: dữ liệu Local đọc xong sau vài ms, còn các màn hình
   // tự hiện "…" ở chỗ số liệu khi chưa nạp xong. Nhờ vậy UI hiện ngay lập tức.
   return (
     <View style={styles.root}>
-      <AccountBar />
+      <AccountBar onOpenSettings={() => setShowSettings(true)} />
 
       <NavigationContainer>
         <Tab.Navigator
@@ -159,34 +227,49 @@ function MainTabs() {
               tabBarBadgeStyle: styles.tabBarBadge,
             }}
           />
+          <Tab.Screen
+            name="CaiDat"
+            component={SettingsTab}
+            options={{
+              title: 'Cài Đặt',
+              tabBarIcon: ({ color, size }) => (
+                <Ionicons name="settings" size={size} color={color} />
+              ),
+            }}
+          />
         </Tab.Navigator>
       </NavigationContainer>
+
+      <Modal
+        visible={showSettings}
+        animationType="slide"
+        presentationStyle="fullScreen"
+        onRequestClose={() => setShowSettings(false)}
+      >
+        <SettingsWithPinGate onClose={() => setShowSettings(false)} />
+      </Modal>
     </View>
   );
 }
 
-/** Thanh trên cùng: tên tài khoản, vai trò và nút Đăng xuất */
-function AccountBar() {
+/**
+ * Tab Cài đặt. Dùng lại chính màn hình Cài đặt (kèm cổng PIN cho phụ huynh);
+ * `onClose` đưa học sinh về tab Học Tập thay vì đóng modal.
+ */
+function SettingsTab() {
+  const navigation = useNavigation<BottomTabNavigationProp<RootTabParamList>>();
+  return <SettingsWithPinGate onClose={() => navigation.navigate('HocTap')} />;
+}
+
+/** Thanh trên cùng: lời chào, vai trò, số phút và nút Cài đặt */
+function AccountBar({ onOpenSettings }: { onOpenSettings: () => void }) {
   const insets = useSafeAreaInsets();
-  const { session, signOut } = useAuth();
-  const { syncState } = usePlaytime();
-
-  const handleSignOut = useCallback(() => {
-    const confirmMessage =
-      'Tiến độ đã được lưu. Em có chắc muốn đăng xuất khỏi tài khoản này?';
-
-    if (Platform.OS === 'web') {
-      // Alert của react-native-web không có nút, nên dùng confirm của trình duyệt
-      if (globalThis.confirm?.(confirmMessage) ?? true) void signOut();
-      return;
-    }
-    Alert.alert('Đăng xuất', confirmMessage, [
-      { text: 'Ở lại', style: 'cancel' },
-      { text: 'Đăng xuất', style: 'destructive', onPress: () => void signOut() },
-    ]);
-  }, [signOut]);
+  const { session } = useAuth();
+  const { syncState, availableMinutes, hydrated } = usePlaytime();
 
   if (!session) return null;
+
+  const isParent = session.role === 'parent';
 
   const syncColor =
     syncState === 'synced'
@@ -198,31 +281,40 @@ function AccountBar() {
           : 'rgba(255,255,255,0.5)';
 
   return (
-    <View style={[styles.accountBar, { paddingTop: insets.top + spacing.sm }]}>
-      <Ionicons
-        name={session.role === 'parent' ? 'shield-checkmark' : 'person-circle'}
-        size={22}
-        color={colors.textOnPrimary}
-      />
-      <View style={styles.accountTextGroup}>
-        <Text style={styles.accountName} numberOfLines={1}>
-          {session.username}
-        </Text>
-        <Text style={styles.accountRole}>
-          {session.role === 'parent' ? 'Phụ huynh' : 'Học sinh'}
+    <View style={[styles.accountBar, { paddingTop: insets.top + spacing.md }]}>
+      {/* Avatar học sinh: chữ cái đầu của tên */}
+      <View style={[styles.avatar, isParent && styles.avatarParent]}>
+        <Text style={styles.avatarText}>
+          {session.username.charAt(0).toUpperCase()}
         </Text>
       </View>
 
-      <View style={[styles.syncDot, { backgroundColor: syncColor }]} />
+      <View style={styles.accountTextGroup}>
+        <Text style={styles.accountName} numberOfLines={1}>
+          Xin chào, {session.username}!
+        </Text>
+        <View style={styles.greetingRow}>
+          <Text style={[styles.roleBadge, isParent && styles.roleBadgeParent]}>
+            {isParent ? '👨‍👩‍👧 Phụ huynh' : '🧑‍🎓 Học sinh'}
+          </Text>
+          <View style={[styles.syncDot, { backgroundColor: syncColor }]} />
+        </View>
+      </View>
+
+      {/* Chip đếm phút chơi game tích luỹ */}
+      <View style={styles.minutesChip}>
+        <Text style={styles.minutesEmoji}>🎮</Text>
+        <Text style={styles.minutesValue}>{hydrated ? availableMinutes : '…'}</Text>
+        <Text style={styles.minutesUnit}>phút</Text>
+      </View>
 
       <Pressable
-        onPress={handleSignOut}
+        onPress={onOpenSettings}
         accessibilityRole="button"
-        accessibilityLabel="Đăng xuất"
-        style={({ pressed }) => [styles.signOutButton, pressed && styles.pressed]}
+        accessibilityLabel="Mở cài đặt"
+        style={({ pressed }) => [styles.iconButton, pressed && styles.pressed]}
       >
-        <Ionicons name="log-out-outline" size={18} color={colors.textOnPrimary} />
-        <Text style={styles.signOutText}>Đăng xuất</Text>
+        <Ionicons name="settings-outline" size={20} color={colors.textOnPrimary} />
       </Pressable>
     </View>
   );
@@ -242,39 +334,90 @@ function SplashScreen({ label }: { label: string }) {
 const styles = StyleSheet.create({
   root: { flex: 1, backgroundColor: colors.background },
 
+  // ---- Header cố định ----
   accountBar: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: spacing.sm,
-    backgroundColor: colors.primaryDark,
+    gap: spacing.md,
+    backgroundColor: colors.primary,
     paddingHorizontal: spacing.lg,
-    paddingBottom: spacing.sm,
+    paddingBottom: spacing.md,
+    borderBottomLeftRadius: radius.xl,
+    borderBottomRightRadius: radius.xl,
+    ...elevation(2),
   },
-  accountTextGroup: { flex: 1 },
-  accountName: { color: colors.textOnPrimary, fontSize: 14, fontWeight: '800' },
+  avatar: {
+    width: 42,
+    height: 42,
+    borderRadius: radius.pill,
+    backgroundColor: 'rgba(255,255,255,0.24)',
+    borderWidth: 2,
+    borderColor: 'rgba(255,255,255,0.5)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  avatarParent: { backgroundColor: 'rgba(251,191,36,0.32)', borderColor: '#FCD34D' },
+  avatarText: { color: colors.textOnPrimary, fontSize: 18, fontWeight: '800' },
+
+  accountTextGroup: { flex: 1, gap: 3 },
+  accountName: { color: colors.textOnPrimary, fontSize: 15, fontWeight: '800' },
   accountRole: { color: '#C7D2FE', fontSize: 11 },
   syncDot: { width: 8, height: 8, borderRadius: radius.pill },
-  signOutButton: {
+
+  minutesChip: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: spacing.xs,
-    backgroundColor: 'rgba(255,255,255,0.18)',
+    gap: 3,
+    backgroundColor: colors.reward,
     paddingHorizontal: spacing.md,
     paddingVertical: spacing.sm,
     borderRadius: radius.pill,
+    ...elevation(1),
   },
-  signOutText: { color: colors.textOnPrimary, fontSize: 12, fontWeight: '800' },
+  minutesEmoji: { fontSize: 14 },
+  minutesValue: { color: colors.textOnPrimary, fontSize: 16, fontWeight: '800' },
+  minutesUnit: { color: 'rgba(255,255,255,0.9)', fontSize: 11, fontWeight: '700' },
+  greetingRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm },
+  roleBadge: {
+    fontSize: 10,
+    fontWeight: '800',
+    color: colors.primaryDark,
+    backgroundColor: '#DBEAFE',
+    paddingHorizontal: spacing.sm,
+    paddingVertical: 2,
+    borderRadius: radius.pill,
+    overflow: 'hidden',
+  },
+  roleBadgeParent: { backgroundColor: '#FDE68A', color: '#92400E' },
+  iconButton: {
+    width: 42,
+    height: 42,
+    borderRadius: radius.pill,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'rgba(255,255,255,0.22)',
+  },
 
+  /**
+   * Thanh điều hướng nổi, nền bán trong suốt kiểu kính mờ.
+   * Dùng màu bán trong suốt + bóng đổ thay vì blur thật: blur cần thêm
+   * `expo-blur` (native module), mà hiệu quả thị giác gần như tương đương.
+   */
   tabBar: {
-    height: Platform.OS === 'ios' ? 88 : 68,
+    position: 'absolute',
+    left: spacing.md,
+    right: spacing.md,
+    bottom: Platform.OS === 'ios' ? spacing.xl : spacing.md,
+    height: 68,
     paddingTop: spacing.sm,
-    paddingBottom: Platform.OS === 'ios' ? spacing.xl : spacing.sm,
-    backgroundColor: colors.surface,
-    borderTopColor: colors.border,
-    borderTopWidth: 1,
+    paddingBottom: spacing.sm,
+    backgroundColor: colors.glass,
+    borderRadius: radius.xl,
+    borderTopWidth: 0,
+    ...elevation(3),
   },
   tabBarItem: { paddingVertical: spacing.xs },
-  tabBarLabel: { fontSize: 12, fontWeight: '700' },
+  tabBarLabel: { fontSize: 11, fontWeight: '800' },
   tabBarBadge: {
     backgroundColor: colors.success,
     color: colors.textOnPrimary,

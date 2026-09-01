@@ -1,6 +1,12 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
-import type { ProgressSyncPayload, StoredProgress } from '../types';
+import {
+  EMPTY_WEEK_PROGRESS,
+  type ProgressSyncPayload,
+  type StoredProgress,
+  type Subject,
+  type SubjectWeekProgress,
+} from '../types';
 
 /**
  * Tầng lưu trữ Local — nguồn dữ liệu CHÍNH của ứng dụng.
@@ -23,6 +29,18 @@ export function progressKey(userId: string): string {
 /* Tiến độ                                                             */
 /* ------------------------------------------------------------------ */
 
+/** Map tiến độ tuần luôn đủ ba môn và nằm trong khoảng hợp lệ */
+function sanitizeWeeks(raw: Partial<SubjectWeekProgress> | undefined): SubjectWeekProgress {
+  const result = { ...EMPTY_WEEK_PROGRESS };
+  if (!raw) return result;
+
+  for (const subject of Object.keys(result) as Subject[]) {
+    const value = Number(raw[subject]);
+    if (Number.isFinite(value)) result[subject] = Math.min(35, Math.max(0, Math.floor(value)));
+  }
+  return result;
+}
+
 function sanitizeProgress(raw: Partial<StoredProgress>): StoredProgress {
   return {
     version: 1,
@@ -31,7 +49,7 @@ function sanitizeProgress(raw: Partial<StoredProgress>): StoredProgress {
     masteredQuestionIds: Array.isArray(raw.masteredQuestionIds)
       ? raw.masteredQuestionIds.filter((x): x is string => typeof x === 'string')
       : [],
-    highestCompletedWeek: Math.min(35, Math.max(0, Math.floor(raw.highestCompletedWeek ?? 0))),
+    completedWeeks: sanitizeWeeks(raw.completedWeeks),
     lastUpdated: raw.lastUpdated ?? new Date().toISOString(),
   };
 }

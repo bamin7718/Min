@@ -10,12 +10,13 @@ import React, {
 import { AppState, type AppStateStatus } from 'react-native';
 
 import {
-  DEFAULT_PARENT_PIN,
   MAX_ACCUMULATED_MINUTES,
   POINTS_PER_CORRECT,
   REPEAT_ANSWER_GIVES_MINUTES,
+  REPEAT_ANSWER_GIVES_POINTS,
 } from '../constants/mockData';
-import { TOTAL_WEEKS, weekBonusMinutes, weekPassThreshold } from './../constants/mathCurriculum';
+import { totalWeeks } from '../constants/curriculum';
+import { weekBonusMinutes, weekPassThreshold } from '../constants/mathCurriculum';
 import { isApiConfigured } from '../lib/authApi';
 import {
   readLocalProgress,
@@ -23,14 +24,17 @@ import {
   writeLocalProgress,
 } from '../lib/storage';
 import { syncEngine, type EngineState } from '../lib/syncEngine';
-import type {
-  ProgressSyncPayload,
-  Question,
-  StoredProgress,
-  SyncState,
-  SessionUser,
-  UserProgress,
-  WeekTopic,
+import {
+  EMPTY_WEEK_PROGRESS,
+  type ProgressSyncPayload,
+  type Question,
+  type StoredProgress,
+  type Subject,
+  type SubjectWeekProgress,
+  type SyncState,
+  type SessionUser,
+  type UserProgress,
+  type WeekTopic,
 } from '../types';
 import { useAuth } from './AuthContext';
 
@@ -80,8 +84,8 @@ interface PlaytimeContextValue {
   isLocked: boolean;
   /** Id các câu đã từng trả lời đúng */
   masteredQuestionIds: string[];
-  /** Tuần Toán cao nhất đã vượt qua (0 = chưa qua tuần nào) */
-  highestCompletedWeek: number;
+  /** Tuần cao nhất đã vượt qua của từng môn (0 = chưa qua tuần nào) */
+  completedWeeks: SubjectWeekProgress;
   /** Tiến độ ở dạng công khai, dùng để đồng bộ Supabase */
   progress: UserProgress;
 
@@ -89,14 +93,21 @@ interface PlaytimeContextValue {
   submitAnswer: (question: Question, selectedAnswer: number) => RewardOutcome;
   startPlaying: () => void;
   pausePlaying: () => void;
-  /** Ghi nhận kết quả một tuần Toán: mở tuần kế tiếp và cộng phút thưởng */
-  completeWeek: (week: WeekTopic, correctCount: number) => WeekOutcome;
-  /** Kiểm tra mã PIN phụ huynh */
-  verifyParentPin: (pin: string) => boolean;
-  /** Phụ huynh cấp thêm phút, cần đúng mã PIN. Trả về `true` nếu thành công */
-  grantMinutesByParent: (minutes: number, pin: string) => boolean;
-  /** Xoá toàn bộ tiến độ (cần đúng mã PIN) */
-  resetProgress: (pin: string) => boolean;
+  /** Ghi nhận kết quả một tuần: mở tuần kế tiếp và cộng phút thưởng */
+  completeWeek: (
+    week: WeekTopic,
+    correctCount: number,
+    totalQuestions: number,
+  ) => WeekOutcome;
+  /**
+   * Cộng thêm phút chơi game.
+   *
+   * KHÔNG nhận mã PIN: việc xác thực PIN do `AuthContext.verifyPin` làm ở
+   * server. Màn hình gọi hàm này phải tự đảm bảo đã mở khoá trước.
+   */
+  grantMinutesByParent: (minutes: number) => boolean;
+  /** Xoá toàn bộ tiến độ của tài khoản hiện tại */
+  resetProgress: () => boolean;
 
   // ----- Đồng bộ Supabase -----
   syncState: SyncState;
@@ -112,6 +123,19 @@ interface PlaytimeContextValue {
 }
 
 const PlaytimeContext = createContext<PlaytimeContextValue | null>(null);
+
+/** Ép map tiến độ về khoảng hợp lệ và luôn đủ ba môn */
+function sanitizeWeeks(raw: Partial<SubjectWeekProgress> | undefined): SubjectWeekProgress {
+  const result = { ...EMPTY_WEEK_PROGRESS };
+  if (!raw) return result;
+
+  for (const subject of Object.keys(result) as Subject[]) {
+    const value = Number(raw[subject]);
+    if (!Number.isFinite(value)) continue;
+    result[subject] = Math.min(totalWeeks(subject), Math.max(0, Math.floor(value)));
+  }
+  return result;
+}
 
 function clampSeconds(value: number): number {
   if (!Number.isFinite(value)) return 0;
@@ -142,7 +166,9 @@ export function PlaytimeProvider({ children }: { children: React.ReactNode }) {
   const [totalPoints, setTotalPoints] = useState(0);
   const [availableSeconds, setAvailableSeconds] = useState(0);
   const [masteredQuestionIds, setMasteredQuestionIds] = useState<string[]>([]);
-  const [highestCompletedWeek, setHighestCompletedWeek] = useState(0);
+  const [completedWeeks, setCompletedWeeks] = useState<SubjectWeekProgress>(
+    EMPTY_WEEK_PROGRESS,
+  );
   const [isPlaying, setIsPlaying] = useState(false);
 
   /**
@@ -162,14 +188,14 @@ export function PlaytimeProvider({ children }: { children: React.ReactNode }) {
     totalPoints,
     availableSeconds,
     masteredQuestionIds,
-    highestCompletedWeek,
+    completedWeeks,
     lastUpdated,
   });
   stateRef.current = {
     totalPoints,
     availableSeconds,
     masteredQuestionIds,
-    highestCompletedWeek,
+    completedWeeks,
     lastUpdated,
   };
 
@@ -186,7 +212,7 @@ export function PlaytimeProvider({ children }: { children: React.ReactNode }) {
       setTotalPoints(0);
       setAvailableSeconds(0);
       setMasteredQuestionIds([]);
-      setHighestCompletedWeek(0);
+      setCompletedWeeks(EMPTY_WEEK_PROGRESS);
       setLastUpdated(null);
       setIsPlaying(false);
       return;
@@ -198,7 +224,7 @@ export function PlaytimeProvider({ children }: { children: React.ReactNode }) {
     setTotalPoints(0);
     setAvailableSeconds(0);
     setMasteredQuestionIds([]);
-    setHighestCompletedWeek(0);
+    setCompletedWeeks(EMPTY_WEEK_PROGRESS);
     setLastUpdated(null);
     setIsPlaying(false);
 
@@ -210,7 +236,7 @@ export function PlaytimeProvider({ children }: { children: React.ReactNode }) {
           setTotalPoints(saved.totalPoints);
           setAvailableSeconds(clampSeconds(saved.availableSeconds));
           setMasteredQuestionIds(saved.masteredQuestionIds);
-          setHighestCompletedWeek(Math.min(TOTAL_WEEKS, saved.highestCompletedWeek));
+          setCompletedWeeks(sanitizeWeeks(saved.completedWeeks));
           setLastUpdated(saved.lastUpdated);
         }
       } catch (error) {
@@ -235,7 +261,7 @@ export function PlaytimeProvider({ children }: { children: React.ReactNode }) {
         totalPoints,
         availableSeconds,
         masteredQuestionIds,
-        highestCompletedWeek,
+        completedWeeks,
         lastUpdated,
       };
 
@@ -249,7 +275,7 @@ export function PlaytimeProvider({ children }: { children: React.ReactNode }) {
           totalPoints,
           accumulatedGameMinutes: Math.floor(availableSeconds / 60),
           masteredQuestionIds,
-          highestCompletedWeek,
+          completedWeeks,
           lastUpdated,
         });
       }
@@ -261,7 +287,7 @@ export function PlaytimeProvider({ children }: { children: React.ReactNode }) {
     totalPoints,
     availableSeconds,
     masteredQuestionIds,
-    highestCompletedWeek,
+    completedWeeks,
     lastUpdated,
     currentUserId,
     sessionToken,
@@ -355,9 +381,7 @@ export function PlaytimeProvider({ children }: { children: React.ReactNode }) {
     setTotalPoints(Math.max(0, Math.floor(remote.totalPoints)));
     setAvailableSeconds(clampSeconds(remote.accumulatedGameMinutes * 60));
     setMasteredQuestionIds(remote.masteredQuestionIds);
-    setHighestCompletedWeek(
-      Math.min(TOTAL_WEEKS, Math.max(0, Math.floor(remote.highestCompletedWeek))),
-    );
+    setCompletedWeeks(sanitizeWeeks(remote.completedWeeks));
     setLastUpdated(remote.lastUpdated);
   }, []);
 
@@ -402,8 +426,11 @@ export function PlaytimeProvider({ children }: { children: React.ReactNode }) {
       const alreadyMastered = masteredQuestionIds.includes(question.id);
       const minutesEarned =
         alreadyMastered && !REPEAT_ANSWER_GIVES_MINUTES ? 0 : question.rewardMinutes;
+      // Chỉ câu đúng LẦN ĐẦU mới sinh phần thưởng
+      const pointsEarned =
+        alreadyMastered && !REPEAT_ANSWER_GIVES_POINTS ? 0 : POINTS_PER_CORRECT;
 
-      setTotalPoints((prev) => prev + POINTS_PER_CORRECT);
+      if (pointsEarned > 0) setTotalPoints((prev) => prev + pointsEarned);
       if (minutesEarned > 0) {
         setAvailableSeconds((prev) => clampSeconds(prev + minutesEarned * 60));
       }
@@ -412,12 +439,7 @@ export function PlaytimeProvider({ children }: { children: React.ReactNode }) {
       }
       touch();
 
-      return {
-        isCorrect: true,
-        pointsEarned: POINTS_PER_CORRECT,
-        minutesEarned,
-        alreadyMastered,
-      };
+      return { isCorrect: true, pointsEarned, minutesEarned, alreadyMastered };
     },
     [masteredQuestionIds, touch],
   );
@@ -430,8 +452,8 @@ export function PlaytimeProvider({ children }: { children: React.ReactNode }) {
   const pausePlaying = useCallback(() => setIsPlaying(false), []);
 
   const completeWeek = useCallback(
-    (week: WeekTopic, correctCount: number): WeekOutcome => {
-      const required = weekPassThreshold(week);
+    (week: WeekTopic, correctCount: number, totalQuestions: number): WeekOutcome => {
+      const required = weekPassThreshold(totalQuestions);
       const passed = correctCount >= required;
 
       if (!passed) {
@@ -440,14 +462,19 @@ export function PlaytimeProvider({ children }: { children: React.ReactNode }) {
 
       // Chỉ thưởng và mở khoá ở lần ĐẦU vượt qua tuần, để làm lại tuần cũ
       // không thể cộng phút chơi game vô hạn.
-      const isFirstTime = week.weekNumber > highestCompletedWeek;
+      const done = completedWeeks[week.subject] ?? 0;
+      const isFirstTime = week.weekNumber > done;
       if (!isFirstTime) {
         return { passed: true, required, bonusMinutes: 0, unlockedWeek: null };
       }
 
       const bonusMinutes = weekBonusMinutes(week);
       setAvailableSeconds((prev) => clampSeconds(prev + bonusMinutes * 60));
-      setHighestCompletedWeek((prev) => Math.max(prev, week.weekNumber));
+      // Chỉ nâng tiến độ của ĐÚNG môn đó, không đụng các môn khác
+      setCompletedWeeks((prev) => ({
+        ...prev,
+        [week.subject]: Math.max(prev[week.subject] ?? 0, week.weekNumber),
+      }));
       touch();
 
       const nextWeek = week.weekNumber + 1;
@@ -455,42 +482,34 @@ export function PlaytimeProvider({ children }: { children: React.ReactNode }) {
         passed: true,
         required,
         bonusMinutes,
-        unlockedWeek: nextWeek <= TOTAL_WEEKS ? nextWeek : null,
+        unlockedWeek: nextWeek <= totalWeeks(week.subject) ? nextWeek : null,
       };
     },
-    [highestCompletedWeek, touch],
-  );
-
-  const verifyParentPin = useCallback(
-    (pin: string) => pin === DEFAULT_PARENT_PIN,
-    [],
+    [completedWeeks, touch],
   );
 
   const grantMinutesByParent = useCallback(
-    (minutes: number, pin: string) => {
-      if (!verifyParentPin(pin)) return false;
+    (minutes: number) => {
       if (!Number.isFinite(minutes) || minutes <= 0) return false;
 
       setAvailableSeconds((prev) => clampSeconds(prev + Math.floor(minutes) * 60));
       touch();
       return true;
     },
-    [touch, verifyParentPin],
+    [touch],
   );
 
   const resetProgress = useCallback(
-    (pin: string) => {
-      if (!verifyParentPin(pin)) return false;
-
+    () => {
       setIsPlaying(false);
       setTotalPoints(0);
       setAvailableSeconds(0);
       setMasteredQuestionIds([]);
-      setHighestCompletedWeek(0);
+      setCompletedWeeks(EMPTY_WEEK_PROGRESS);
       touch();
       return true;
     },
-    [touch, verifyParentPin],
+    [touch],
   );
 
   const availableMinutes = Math.floor(availableSeconds / 60);
@@ -507,7 +526,7 @@ export function PlaytimeProvider({ children }: { children: React.ReactNode }) {
       isPlaying,
       isLocked: availableSeconds <= 0,
       masteredQuestionIds,
-      highestCompletedWeek,
+      completedWeeks,
       progress: {
         totalPoints,
         accumulatedGameMinutes: availableMinutes,
@@ -517,7 +536,6 @@ export function PlaytimeProvider({ children }: { children: React.ReactNode }) {
       startPlaying,
       pausePlaying,
       completeWeek,
-      verifyParentPin,
       grantMinutesByParent,
       resetProgress,
       syncState,
@@ -535,13 +553,12 @@ export function PlaytimeProvider({ children }: { children: React.ReactNode }) {
       availableMinutes,
       isPlaying,
       masteredQuestionIds,
-      highestCompletedWeek,
+      completedWeeks,
       lastUpdated,
       submitAnswer,
       startPlaying,
       pausePlaying,
       completeWeek,
-      verifyParentPin,
       grantMinutesByParent,
       resetProgress,
       syncState,

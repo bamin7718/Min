@@ -129,3 +129,50 @@ export async function pushProgress(
   });
   return result.ok ? { ok: true, data: null } : result;
 }
+
+/* ------------------------------------------------------------------ */
+/* Tài khoản                                                           */
+/* ------------------------------------------------------------------ */
+
+/** Đổi tên hiển thị. Trả về tên đã được server chấp nhận. */
+export async function renameAccount(
+  token: string,
+  username: string,
+): Promise<SyncResult<string>> {
+  const result = await callApi<{ username: string }>({
+    method: 'POST',
+    path: '/api/account?action=rename',
+    token,
+    body: { username },
+  });
+  return result.ok ? { ok: true, data: result.data.username } : result;
+}
+
+/** Kiểm tra mã PIN phụ huynh (xác thực ở server) */
+export async function verifyParentPinRemote(
+  token: string,
+  pin: string,
+): Promise<SyncResult<null>> {
+  const result = await callApi<unknown>({
+    method: 'POST',
+    path: '/api/account?action=verify-pin',
+    token,
+    body: { pin },
+  });
+  return result.ok ? { ok: true, data: null } : result;
+}
+
+/** Đổi mã PIN phụ huynh */
+export async function changeParentPin(
+  token: string,
+  oldPin: string,
+  newPin: string,
+): Promise<SyncResult<null>> {
+  const result = await callApi<unknown>({
+    method: 'POST',
+    path: '/api/account?action=change-pin',
+    token,
+    body: { oldPin, newPin },
+  });
+  return result.ok ? { ok: true, data: null } : result;
+}

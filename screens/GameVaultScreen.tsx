@@ -27,10 +27,14 @@ import {
 import {
   CONTENT_MAX_WIDTH,
   TABLET_BREAKPOINT,
+  TAB_BAR_SPACE,
   colors,
+  elevation,
   radius,
   spacing,
+  touch,
 } from '../constants/theme';
+import { useAuth } from '../context/AuthContext';
 import { formatClock, usePlaytime } from '../context/PlaytimeContext';
 import type { GameId, RootTabParamList, SyncState } from '../types';
 import { GAMES } from './games/catalog';
@@ -83,6 +87,9 @@ export default function GameVaultScreen() {
     return () => loop.stop();
   }, [isPlaying, pulseAnim]);
 
+  const { session } = useAuth();
+  const isParent = session?.role === 'parent';
+
   const goToQuiz = useCallback(() => navigation.navigate('HocTap'), [navigation]);
 
   // ----- Mở / đóng trò chơi -----
@@ -128,7 +135,10 @@ export default function GameVaultScreen() {
         contentContainerStyle={[
           styles.content,
           isTablet && styles.contentTablet,
-          { paddingTop: insets.top + spacing.lg, paddingBottom: insets.bottom + spacing.xxl },
+          {
+            paddingTop: insets.top + spacing.lg,
+            paddingBottom: insets.bottom + TAB_BAR_SPACE,
+          },
         ]}
         keyboardShouldPersistTaps="handled"
         showsVerticalScrollIndicator={false}
@@ -210,8 +220,12 @@ export default function GameVaultScreen() {
           </>
         )}
 
-        {/* ----- Khu vực phụ huynh ----- */}
-        <ParentPanel />
+        {/*
+          Khu vực phụ huynh KHÔNG được render với tài khoản học sinh — không
+          phải chỉ ẩn bằng CSS. Học sinh chỉ thấy số phút kiếm được và danh
+          sách game.
+        */}
+        {isParent ? <ParentPanel /> : <StudentNote />}
       </ScrollView>
 
       {/* ----- Trò chơi mở toàn màn hình ----- */}
@@ -255,7 +269,9 @@ const GameGrid = React.memo(function GameGrid({
               pressed && styles.pressed,
             ]}
           >
-            <Text style={styles.gameEmoji}>{game.emoji}</Text>
+            <View style={[styles.gameIconBubble, { backgroundColor: game.color }]}>
+              <Text style={styles.gameEmoji}>{game.emoji}</Text>
+            </View>
             <Text style={[styles.gameName, { color: game.color }]} numberOfLines={1}>
               {game.name}
             </Text>
@@ -282,7 +298,7 @@ function LockedPanel({ onGoToQuiz }: { onGoToQuiz: () => void }) {
   return (
     <View style={styles.lockedCard}>
       <Text style={styles.lockedEmoji}>🔒</Text>
-      <Text style={styles.lockedTitle}>Hết giờ chơi!</Text>
+      <Text style={styles.lockedTitle}>Hết giờ chơi rồi!</Text>
       <Text style={styles.lockedMessage}>
         Hãy làm bài tập Lớp 3 để kiếm thêm phút chơi game.
       </Text>
@@ -290,10 +306,12 @@ function LockedPanel({ onGoToQuiz }: { onGoToQuiz: () => void }) {
       <Pressable
         onPress={onGoToQuiz}
         accessibilityRole="button"
+        accessibilityLabel="Học tiếp để kiếm thêm phút chơi game"
         style={({ pressed }) => [styles.lockedButton, pressed && styles.pressed]}
       >
-        <Ionicons name="school" size={22} color={colors.primary} />
-        <Text style={styles.lockedButtonText}>Đi học bài ngay</Text>
+        <Text style={styles.lockedButtonEmoji}>📚</Text>
+        <Text style={styles.lockedButtonText}>Học tiếp kiếm phút</Text>
+        <Ionicons name="arrow-forward" size={20} color={colors.textOnPrimary} />
       </Pressable>
     </View>
   );
@@ -306,9 +324,11 @@ function LockedPanel({ onGoToQuiz }: { onGoToQuiz: () => void }) {
 function ParentPanel() {
   const { grantMinutesByParent, resetProgress, syncState, pendingChanges } =
     usePlaytime();
+  const { verifyPin, pinUnlocked } = useAuth();
 
   const [isOpen, setIsOpen] = useState(false);
   const [pin, setPin] = useState('');
+  const [checking, setChecking] = useState(false);
   const [minutes, setMinutes] = useState<string>(String(PARENT_GRANT_OPTIONS[1]));
   const [message, setMessage] = useState<{
     type: 'success' | 'error';
@@ -333,7 +353,27 @@ function ParentPanel() {
     outputRange: [-8, 8],
   });
 
-  const handleGrant = useCallback(() => {
+  /**
+   * Mã PIN được kiểm tra Ở SERVER. Sau lần đúng đầu tiên, `pinUnlocked` giữ
+   * trạng thái mở trong phiên nên phụ huynh không phải nhập lại liên tục.
+   */
+  const ensureUnlocked = useCallback(async (): Promise<boolean> => {
+    if (pinUnlocked) return true;
+
+    setChecking(true);
+    const result = await verifyPin(pin);
+    setChecking(false);
+
+    if (!result.ok) {
+      playShake();
+      setMessage({ type: 'error', text: result.error ?? 'Mã PIN không đúng.' });
+      return false;
+    }
+    setPin('');
+    return true;
+  }, [pin, pinUnlocked, playShake, verifyPin]);
+
+  const handleGrant = useCallback(async () => {
     Keyboard.dismiss();
     const parsedMinutes = Number.parseInt(minutes, 10);
 
@@ -341,32 +381,22 @@ function ParentPanel() {
       setMessage({ type: 'error', text: 'Số phút phải là số nguyên lớn hơn 0.' });
       return;
     }
+    if (!(await ensureUnlocked())) return;
 
-    const granted = grantMinutesByParent(parsedMinutes, pin);
-    if (!granted) {
-      playShake();
-      setMessage({ type: 'error', text: 'Mã PIN không đúng. Vui lòng thử lại.' });
-      return;
-    }
-
-    setPin('');
+    grantMinutesByParent(parsedMinutes);
     setMessage({
       type: 'success',
       text: `Đã cấp thêm ${parsedMinutes} phút chơi game.`,
     });
-  }, [grantMinutesByParent, minutes, pin, playShake]);
+  }, [ensureUnlocked, grantMinutesByParent, minutes]);
 
-  const handleReset = useCallback(() => {
+  const handleReset = useCallback(async () => {
     Keyboard.dismiss();
-    const done = resetProgress(pin);
-    if (!done) {
-      playShake();
-      setMessage({ type: 'error', text: 'Mã PIN không đúng. Vui lòng thử lại.' });
-      return;
-    }
-    setPin('');
+    if (!(await ensureUnlocked())) return;
+
+    resetProgress();
     setMessage({ type: 'success', text: 'Đã đặt lại điểm và thời gian chơi game.' });
-  }, [pin, playShake, resetProgress]);
+  }, [ensureUnlocked, resetProgress]);
 
 
   return (
@@ -388,7 +418,14 @@ function ParentPanel() {
 
       {isOpen && (
         <Animated.View style={[styles.parentBody, { transform: [{ translateX }] }]}>
-          <Text style={styles.fieldLabel}>Mã PIN phụ huynh</Text>
+          {pinUnlocked ? (
+            <Text style={styles.unlockedNote}>
+              ✅ Đã mở khoá bằng mã PIN trong phiên này.
+            </Text>
+          ) : (
+            <Text style={styles.fieldLabel}>Mã PIN phụ huynh</Text>
+          )}
+          {!pinUnlocked && (
           <TextInput
             value={pin}
             onChangeText={(text) => {
@@ -403,6 +440,7 @@ function ParentPanel() {
             style={styles.input}
             accessibilityLabel="Mã PIN phụ huynh"
           />
+          )}
 
           <Text style={styles.fieldLabel}>Số phút muốn cấp thêm</Text>
           <View style={styles.chipRow}>
@@ -455,12 +493,20 @@ function ParentPanel() {
           )}
 
           <Pressable
-            onPress={handleGrant}
+            onPress={() => void handleGrant()}
+            disabled={checking}
             accessibilityRole="button"
-            style={({ pressed }) => [styles.grantButton, pressed && styles.pressed]}
+            accessibilityLabel="Cấp thêm giờ chơi game"
+            style={({ pressed }) => [
+              styles.grantButton,
+              checking && styles.buttonDisabled,
+              pressed && !checking && styles.pressed,
+            ]}
           >
             <Ionicons name="add-circle" size={22} color={colors.textOnPrimary} />
-            <Text style={styles.grantButtonText}>Cấp thêm giờ / Mở khoá</Text>
+            <Text style={styles.grantButtonText}>
+              {checking ? 'Đang kiểm tra PIN...' : 'Cấp thêm giờ / Mở khoá'}
+            </Text>
           </Pressable>
 
           <View style={styles.accountButton}>
@@ -473,8 +519,10 @@ function ParentPanel() {
           </View>
 
           <Pressable
-            onPress={handleReset}
+            onPress={() => void handleReset()}
+            disabled={checking}
             accessibilityRole="button"
+            accessibilityLabel="Đặt lại điểm và thời gian"
             style={({ pressed }) => [styles.resetButton, pressed && styles.pressed]}
           >
             <Ionicons name="trash-outline" size={18} color={colors.danger} />
@@ -482,12 +530,25 @@ function ParentPanel() {
           </Pressable>
 
           <Text style={styles.parentHint}>
-            Tối đa {MAX_ACCUMULATED_MINUTES} phút tích luỹ. Mã PIN mặc định là 1234 —
-            phụ huynh nên đổi trong tệp constants/mockData.ts.
+            Tối đa {MAX_ACCUMULATED_MINUTES} phút tích luỹ. Đổi mã PIN trong phần
+            Cài đặt ở góc trên bên phải.
           </Text>
         </Animated.View>
       )}
 
+    </View>
+  );
+}
+
+/** Ghi chú thay cho khu vực phụ huynh khi tài khoản là học sinh */
+function StudentNote() {
+  return (
+    <View style={styles.noteCard}>
+      <Ionicons name="school-outline" size={20} color={colors.primary} />
+      <Text style={styles.noteText}>
+        Muốn có thêm giờ chơi game thì em làm thêm bài tập ở mục Học Tập nhé! Việc cấp
+        thêm giờ chỉ bố mẹ mới làm được.
+      </Text>
     </View>
   );
 }
@@ -550,7 +611,8 @@ const styles = StyleSheet.create({
 
   // Đồng hồ
   clockCard: {
-    backgroundColor: colors.primary,
+    backgroundColor: colors.game,
+    ...elevation(2),
     borderRadius: radius.xl,
     paddingVertical: spacing.xxl,
     paddingHorizontal: spacing.lg,
@@ -583,12 +645,21 @@ const styles = StyleSheet.create({
     flexBasis: '47%',
     flexGrow: 1,
     borderWidth: 2,
-    borderRadius: radius.lg,
+    borderRadius: radius.xl,
     padding: spacing.lg,
     gap: spacing.xs,
+    ...elevation(2),
   },
-  gameEmoji: { fontSize: 40 },
-  gameName: { fontSize: 16, fontWeight: '800', marginTop: spacing.xs },
+  gameIconBubble: {
+    width: 56,
+    height: 56,
+    borderRadius: radius.lg,
+    alignItems: 'center',
+    justifyContent: 'center',
+    ...elevation(1),
+  },
+  gameEmoji: { fontSize: 30 },
+  gameName: { fontSize: 16, fontWeight: '800', marginTop: spacing.sm },
   gameDescription: {
     fontSize: 12,
     color: colors.textMuted,
@@ -600,9 +671,9 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     gap: spacing.xs,
-    paddingVertical: spacing.sm,
     borderRadius: radius.pill,
     marginTop: spacing.sm,
+    minHeight: touch.min,
   },
   gamePlayText: { color: colors.textOnPrimary, fontSize: 13, fontWeight: '800' },
 
@@ -613,8 +684,8 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     gap: spacing.sm,
     backgroundColor: colors.primarySoft,
-    paddingVertical: spacing.md,
     borderRadius: radius.pill,
+    minHeight: touch.min,
   },
   timerOnlyText: { color: colors.primary, fontSize: 14, fontWeight: '700' },
 
@@ -632,12 +703,13 @@ const styles = StyleSheet.create({
   lockedCard: {
     backgroundColor: colors.lockOverlay,
     borderRadius: radius.xl,
-    padding: spacing.xl,
+    padding: spacing.xxl,
     alignItems: 'center',
     gap: spacing.sm,
+    ...elevation(3),
   },
-  lockedEmoji: { fontSize: 56 },
-  lockedTitle: { color: colors.textOnPrimary, fontSize: 24, fontWeight: '800' },
+  lockedEmoji: { fontSize: 64 },
+  lockedTitle: { color: colors.textOnPrimary, fontSize: 26, fontWeight: '800' },
   lockedMessage: {
     color: '#CBD5E1',
     fontSize: 15,
@@ -645,16 +717,21 @@ const styles = StyleSheet.create({
     lineHeight: 22,
     marginBottom: spacing.md,
   },
+  // Nút hành động chính của màn khoá: to, rực, nằm giữa
   lockedButton: {
     flexDirection: 'row',
     alignItems: 'center',
+    justifyContent: 'center',
     gap: spacing.sm,
-    backgroundColor: colors.surface,
-    paddingVertical: spacing.md,
+    backgroundColor: colors.reward,
     paddingHorizontal: spacing.xl,
     borderRadius: radius.pill,
+    alignSelf: 'stretch',
+    minHeight: touch.primary,
+    ...elevation(2),
   },
-  lockedButtonText: { color: colors.primary, fontSize: 16, fontWeight: '800' },
+  lockedButtonEmoji: { fontSize: 20 },
+  lockedButtonText: { color: colors.textOnPrimary, fontSize: 17, fontWeight: '800' },
 
   // Phụ huynh
   parentCard: {
@@ -713,9 +790,10 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     gap: spacing.sm,
     backgroundColor: colors.primary,
-    paddingVertical: spacing.md,
     borderRadius: radius.pill,
     marginTop: spacing.md,
+    minHeight: touch.primary,
+    ...elevation(1),
   },
   grantButtonText: { color: colors.textOnPrimary, fontSize: 15, fontWeight: '800' },
   accountButton: {
@@ -739,6 +817,13 @@ const styles = StyleSheet.create({
     paddingVertical: spacing.md,
   },
   resetButtonText: { color: colors.danger, fontSize: 14, fontWeight: '700' },
+  unlockedNote: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: colors.success,
+    marginTop: spacing.sm,
+  },
+  buttonDisabled: { opacity: 0.55 },
   parentHint: {
     fontSize: 12,
     color: colors.textMuted,

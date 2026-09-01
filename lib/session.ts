@@ -47,3 +47,22 @@ export async function clearSession(): Promise<void> {
   }
 }
 
+
+const APP_LOCK_KEY = '@lop3-study-game/app-lock-v1';
+
+/** Có bắt nhập PIN khi mở ứng dụng hay không */
+export async function loadAppLock(): Promise<boolean> {
+  try {
+    return (await AsyncStorage.getItem(APP_LOCK_KEY)) === '1';
+  } catch {
+    return false;
+  }
+}
+
+export async function saveAppLock(enabled: boolean): Promise<void> {
+  try {
+    await AsyncStorage.setItem(APP_LOCK_KEY, enabled ? '1' : '0');
+  } catch (error) {
+    console.warn('[session] Không lưu được cài đặt khoá ứng dụng:', error);
+  }
+}

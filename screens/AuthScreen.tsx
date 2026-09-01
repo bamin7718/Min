@@ -15,6 +15,7 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { colors, radius, spacing } from '../constants/theme';
+import { APP_VERSION } from '../constants/version';
 import { useAuth } from '../context/AuthContext';
 import type { UserRole } from '../types';
 
@@ -274,6 +275,8 @@ export default function AuthScreen() {
               : 'Mỗi tài khoản có điểm và giờ chơi game riêng, không lẫn với bạn khác.'}
           </Text>
         </View>
+
+        <Text style={styles.versionLabel}>Phiên bản v{APP_VERSION}</Text>
       </ScrollView>
     </KeyboardAvoidingView>
   );
@@ -416,5 +419,11 @@ const styles = StyleSheet.create({
   buttonDisabled: { opacity: 0.6 },
 
   hint: { fontSize: 12, color: colors.textMuted, lineHeight: 18, marginTop: spacing.xs },
+  versionLabel: {
+    fontSize: 12,
+    color: colors.textMuted,
+    textAlign: 'center',
+    marginTop: spacing.sm,
+  },
   pressed: { opacity: 0.78 },
 });
