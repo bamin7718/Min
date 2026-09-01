@@ -72,6 +72,11 @@ export default async function handler(): Promise<Response> {
     report.cacBang = tables.rows.map((row) => row.name);
     report.coBangUsers = tables.rows.some((row) => row.name === 'users');
 
+    const cols = await client.execute(
+      "SELECT name FROM pragma_table_info('user_progress')",
+    );
+    report.cotUserProgress = cols.rows.map((row) => row.name);
+
     // Chỉ SELECT được chưa đủ: đăng ký cần GHI theo lô. Thử một lô ghi rồi dọn.
     const probe = `zz_health_probe_${Date.now()}`;
     try {

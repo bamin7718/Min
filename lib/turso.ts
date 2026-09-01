@@ -51,10 +51,12 @@ export function createTursoClient(config: TursoConfig): Client {
 
 /** Các cột hiện có của một bảng; mảng rỗng nghĩa là bảng chưa tồn tại */
 async function tableColumns(client: Client, table: string): Promise<Set<string>> {
-  const result = await client.execute({
-    sql: 'SELECT name FROM pragma_table_info(?)',
-    args: [table],
-  });
+  // Nội suy tên bảng thay vì truyền tham số: hàm bảng `pragma_table_info` không
+  // nhận tham số ràng buộc trên mọi phiên bản, và nếu nó lặng lẽ trả 0 dòng thì
+  // migration sẽ bị bỏ qua mà không báo lỗi gì.
+  if (!/^[a-z_][a-z0-9_]*$/.test(table)) throw new Error(`Tên bảng không hợp lệ: ${table}`);
+
+  const result = await client.execute(`SELECT name FROM pragma_table_info('${table}')`);
   return new Set(result.rows.map((row) => String(row.name)));
 }
 
