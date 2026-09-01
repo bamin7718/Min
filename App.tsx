@@ -13,6 +13,7 @@ import {
   Pressable,
   StyleSheet,
   Text,
+  useWindowDimensions,
   View,
 } from 'react-native';
 import { SafeAreaProvider, useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -258,18 +259,30 @@ function MainTabs() {
  */
 function SettingsTab() {
   const navigation = useNavigation<BottomTabNavigationProp<RootTabParamList>>();
-  return <SettingsWithPinGate onClose={() => navigation.navigate('HocTap')} />;
+  // Tab này nằm dưới thanh header cố định nên truyền embedded để khỏi chừa tai thỏ lần hai
+  return (
+    <SettingsWithPinGate embedded onClose={() => navigation.navigate('HocTap')} />
+  );
 }
 
-/** Thanh trên cùng: lời chào, vai trò, số phút và nút Cài đặt */
+/**
+ * Thanh trên cùng, gói gọn trong MỘT hàng: bên trái là tài khoản (avatar, tên,
+ * vai trò), bên phải là hai chỉ số (điểm, phút chơi game) và nút Cài đặt.
+ *
+ * Không còn dòng lời chào riêng: nó chiếm gần hai dòng chữ mà không mang thêm
+ * thông tin nào so với việc hiện thẳng tên tài khoản.
+ */
 function AccountBar({ onOpenSettings }: { onOpenSettings: () => void }) {
   const insets = useSafeAreaInsets();
+  const { width } = useWindowDimensions();
   const { session } = useAuth();
-  const { syncState, availableMinutes, hydrated } = usePlaytime();
+  const { syncState, availableMinutes, totalPoints, hydrated } = usePlaytime();
 
   if (!session) return null;
 
   const isParent = session.role === 'parent';
+  /** Máy hẹp thì bỏ chữ "điểm"/"phút" trong chip để một hàng vẫn vừa */
+  const compact = width < 380;
 
   const syncColor =
     syncState === 'synced'
@@ -278,34 +291,39 @@ function AccountBar({ onOpenSettings }: { onOpenSettings: () => void }) {
         ? colors.danger
         : syncState === 'syncing'
           ? colors.warning
-          : 'rgba(255,255,255,0.5)';
+          : 'rgba(255,255,255,0.45)';
 
   return (
-    <View style={[styles.accountBar, { paddingTop: insets.top + spacing.md }]}>
-      {/* Avatar học sinh: chữ cái đầu của tên */}
+    <View style={[styles.accountBar, { paddingTop: insets.top + spacing.sm }]}>
+      {/* Avatar: chữ cái đầu của tên, kèm đốm nhỏ báo trạng thái đồng bộ */}
       <View style={[styles.avatar, isParent && styles.avatarParent]}>
         <Text style={styles.avatarText}>
           {session.username.charAt(0).toUpperCase()}
         </Text>
+        <View style={[styles.syncDot, { backgroundColor: syncColor }]} />
       </View>
 
       <View style={styles.accountTextGroup}>
         <Text style={styles.accountName} numberOfLines={1}>
-          Xin chào, {session.username}!
+          {session.username}
         </Text>
-        <View style={styles.greetingRow}>
-          <Text style={[styles.roleBadge, isParent && styles.roleBadgeParent]}>
-            {isParent ? '👨‍👩‍👧 Phụ huynh' : '🧑‍🎓 Học sinh'}
-          </Text>
-          <View style={[styles.syncDot, { backgroundColor: syncColor }]} />
-        </View>
+        <Text style={[styles.roleBadge, isParent && styles.roleBadgeParent]}>
+          {isParent ? '👨‍👩‍👧 Phụ huynh' : '🧑‍🎓 Học sinh'}
+        </Text>
       </View>
 
-      {/* Chip đếm phút chơi game tích luỹ */}
-      <View style={styles.minutesChip}>
-        <Text style={styles.minutesEmoji}>🎮</Text>
-        <Text style={styles.minutesValue}>{hydrated ? availableMinutes : '…'}</Text>
-        <Text style={styles.minutesUnit}>phút</Text>
+      {/* Điểm tích luỹ */}
+      <View style={[styles.statChip, styles.statChipPoints]}>
+        <Text style={styles.statEmoji}>⭐</Text>
+        <Text style={styles.statValue}>{hydrated ? totalPoints : '…'}</Text>
+        {compact ? null : <Text style={styles.statUnit}>điểm</Text>}
+      </View>
+
+      {/* Phút chơi game còn lại */}
+      <View style={[styles.statChip, styles.statChipMinutes]}>
+        <Text style={styles.statEmoji}>⏱️</Text>
+        <Text style={styles.statValue}>{hydrated ? availableMinutes : '…'}</Text>
+        {compact ? null : <Text style={styles.statUnit}>phút</Text>}
       </View>
 
       <Pressable
@@ -314,7 +332,7 @@ function AccountBar({ onOpenSettings }: { onOpenSettings: () => void }) {
         accessibilityLabel="Mở cài đặt"
         style={({ pressed }) => [styles.iconButton, pressed && styles.pressed]}
       >
-        <Ionicons name="settings-outline" size={20} color={colors.textOnPrimary} />
+        <Ionicons name="settings-outline" size={18} color={colors.textOnPrimary} />
       </Pressable>
     </View>
   );
@@ -338,17 +356,17 @@ const styles = StyleSheet.create({
   accountBar: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: spacing.md,
+    gap: spacing.sm,
     backgroundColor: colors.primary,
-    paddingHorizontal: spacing.lg,
-    paddingBottom: spacing.md,
-    borderBottomLeftRadius: radius.xl,
-    borderBottomRightRadius: radius.xl,
+    paddingHorizontal: spacing.md,
+    paddingBottom: spacing.sm,
+    borderBottomLeftRadius: radius.lg,
+    borderBottomRightRadius: radius.lg,
     ...elevation(2),
   },
   avatar: {
-    width: 42,
-    height: 42,
+    width: 36,
+    height: 36,
     borderRadius: radius.pill,
     backgroundColor: 'rgba(255,255,255,0.24)',
     borderWidth: 2,
@@ -357,41 +375,51 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   avatarParent: { backgroundColor: 'rgba(251,191,36,0.32)', borderColor: '#FCD34D' },
-  avatarText: { color: colors.textOnPrimary, fontSize: 18, fontWeight: '800' },
+  avatarText: { color: colors.textOnPrimary, fontSize: 16, fontWeight: '800' },
+  /** Đốm báo đồng bộ nằm ở góc avatar để không chiếm thêm chỗ trên hàng */
+  syncDot: {
+    position: 'absolute',
+    right: -1,
+    bottom: -1,
+    width: 9,
+    height: 9,
+    borderRadius: radius.pill,
+    borderWidth: 1.5,
+    borderColor: colors.primary,
+  },
 
-  accountTextGroup: { flex: 1, gap: 3 },
-  accountName: { color: colors.textOnPrimary, fontSize: 15, fontWeight: '800' },
-  accountRole: { color: '#C7D2FE', fontSize: 11 },
-  syncDot: { width: 8, height: 8, borderRadius: radius.pill },
+  accountTextGroup: { flex: 1, gap: 1, minWidth: 0 },
+  accountName: { color: colors.textOnPrimary, fontSize: 14, fontWeight: '800' },
 
-  minutesChip: {
+  statChip: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 3,
-    backgroundColor: colors.reward,
-    paddingHorizontal: spacing.md,
-    paddingVertical: spacing.sm,
+    paddingHorizontal: spacing.sm,
+    paddingVertical: 5,
     borderRadius: radius.pill,
-    ...elevation(1),
   },
-  minutesEmoji: { fontSize: 14 },
-  minutesValue: { color: colors.textOnPrimary, fontSize: 16, fontWeight: '800' },
-  minutesUnit: { color: 'rgba(255,255,255,0.9)', fontSize: 11, fontWeight: '700' },
-  greetingRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm },
+  statChipPoints: { backgroundColor: 'rgba(255,255,255,0.22)' },
+  statChipMinutes: { backgroundColor: colors.reward },
+  statEmoji: { fontSize: 12 },
+  statValue: { color: colors.textOnPrimary, fontSize: 14, fontWeight: '800' },
+  statUnit: { color: 'rgba(255,255,255,0.9)', fontSize: 10, fontWeight: '700' },
+
   roleBadge: {
-    fontSize: 10,
+    fontSize: 9,
     fontWeight: '800',
     color: colors.primaryDark,
     backgroundColor: '#DBEAFE',
-    paddingHorizontal: spacing.sm,
-    paddingVertical: 2,
+    paddingHorizontal: 6,
+    paddingVertical: 1,
     borderRadius: radius.pill,
     overflow: 'hidden',
+    alignSelf: 'flex-start',
   },
   roleBadgeParent: { backgroundColor: '#FDE68A', color: '#92400E' },
   iconButton: {
-    width: 42,
-    height: 42,
+    width: 36,
+    height: 36,
     borderRadius: radius.pill,
     alignItems: 'center',
     justifyContent: 'center',

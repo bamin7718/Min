@@ -82,15 +82,8 @@ export default function QuizScreen() {
   const { width } = useWindowDimensions();
   const isTablet = width >= TABLET_BREAKPOINT;
 
-  const {
-    totalPoints,
-    availableMinutes,
-    masteredQuestionIds,
-    completedWeeks,
-    submitAnswer,
-    completeWeek,
-    hydrated,
-  } = usePlaytime();
+  const { masteredQuestionIds, completedWeeks, submitAnswer, completeWeek } =
+    usePlaytime();
 
   const [selectedSubject, setSelectedSubject] = useState<Subject | null>(null);
   /** Tuần đang làm bài — chỉ dùng cho môn Toán */
@@ -272,13 +265,10 @@ export default function QuizScreen() {
 
   return (
     <View style={styles.container}>
-      <HeaderBar
-        totalPoints={totalPoints}
-        availableMinutes={availableMinutes}
-        hydrated={hydrated}
-        topInset={insets.top}
-      />
-
+      {/*
+        Không còn HeaderBar riêng ở đây: lời chào cùng hai chip điểm/phút đã bị
+        thanh header chung trong App.tsx gánh, để chỗ đó dành cho nội dung học.
+      */}
       <ScrollView
         contentContainerStyle={contentStyle}
         showsVerticalScrollIndicator={false}
@@ -395,45 +385,6 @@ export default function QuizScreen() {
           </View>
         ) : null}
       </ScrollView>
-    </View>
-  );
-}
-
-/* ------------------------------------------------------------------ */
-/* Thanh trạng thái điểm & phút chơi game                              */
-/* ------------------------------------------------------------------ */
-
-function HeaderBar({
-  totalPoints,
-  availableMinutes,
-  hydrated,
-  topInset,
-}: {
-  totalPoints: number;
-  availableMinutes: number;
-  /** Chưa nạp xong Local thì hiện "…" thay vì số 0 để không nháy sai số */
-  hydrated: boolean;
-  topInset: number;
-}) {
-  return (
-    <View style={[styles.header, { paddingTop: topInset + spacing.md }]}>
-      <View style={styles.headerTextGroup}>
-        <Text style={styles.headerGreeting}>Chào em học sinh Lớp 3 👋</Text>
-        <Text style={styles.headerTitle}>Học bài kiếm giờ chơi game</Text>
-      </View>
-
-      <View style={styles.statRow}>
-        <View style={styles.statChip}>
-          <Text style={styles.statEmoji}>⭐</Text>
-          <Text style={styles.statValue}>{hydrated ? totalPoints : '…'}</Text>
-          <Text style={styles.statLabel}>điểm</Text>
-        </View>
-        <View style={styles.statChip}>
-          <Text style={styles.statEmoji}>🎮</Text>
-          <Text style={styles.statValue}>{hydrated ? availableMinutes : '…'}</Text>
-          <Text style={styles.statLabel}>phút</Text>
-        </View>
-      </View>
     </View>
   );
 }
@@ -1079,36 +1030,6 @@ function SummaryStat({ value, label }: { value: string; label: string }) {
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: colors.background },
-
-  // Header
-  header: {
-    backgroundColor: colors.primary,
-    paddingHorizontal: spacing.lg,
-    paddingBottom: spacing.lg,
-    borderBottomLeftRadius: radius.xl,
-    borderBottomRightRadius: radius.xl,
-  },
-  headerTextGroup: { marginBottom: spacing.md },
-  headerGreeting: { color: '#DBE4FF', fontSize: 14, fontWeight: '600' },
-  headerTitle: {
-    color: colors.textOnPrimary,
-    fontSize: 22,
-    fontWeight: '800',
-    marginTop: spacing.xs,
-  },
-  statRow: { flexDirection: 'row', gap: spacing.md },
-  statChip: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: spacing.xs,
-    backgroundColor: 'rgba(255,255,255,0.22)',
-    paddingHorizontal: spacing.md,
-    paddingVertical: spacing.sm,
-    borderRadius: radius.pill,
-  },
-  statEmoji: { fontSize: 16 },
-  statValue: { color: colors.textOnPrimary, fontSize: 18, fontWeight: '800' },
-  statLabel: { color: '#DBE4FF', fontSize: 13, fontWeight: '600' },
 
   // Nội dung
   content: { padding: spacing.lg, gap: spacing.lg },

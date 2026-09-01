@@ -35,7 +35,7 @@ interface FormMessage {
  */
 export default function AuthScreen() {
   const insets = useSafeAreaInsets();
-  const { isConfigured, signIn, signUp } = useAuth();
+  const { signIn, signUp } = useAuth();
 
   const [mode, setMode] = useState<Mode>('signIn');
   const [username, setUsername] = useState('');
@@ -102,16 +102,11 @@ export default function AuthScreen() {
           <Text style={styles.heroSubtitle}>Dành cho học sinh Lớp 3</Text>
         </View>
 
-        {!isConfigured && (
-          <View style={styles.warnCard}>
-            <Ionicons name="cloud-offline-outline" size={20} color={colors.warning} />
-            <Text style={styles.warnText}>
-              Chưa cấu hình máy chủ. Hãy điền EXPO_PUBLIC_PROGRESS_API_URL trong tệp
-              .env rồi chạy lại: npx expo start -c
-            </Text>
-          </View>
-        )}
-
+        {/*
+          Không còn banner "Chưa cấu hình máy chủ": thiếu máy chủ không phải lỗi.
+          App tự chạy Local Mode (tài khoản và tiến độ nằm trong AsyncStorage),
+          nên nhắc người dùng sửa .env chỉ làm màn hình đăng nhập rối thêm.
+        */}
         <View style={styles.card}>
           {/* Tab switcher Đăng nhập / Đăng ký */}
           <View style={styles.segmented}>
@@ -328,18 +323,6 @@ const styles = StyleSheet.create({
   heroEmoji: { fontSize: 48 },
   heroTitle: { fontSize: 24, fontWeight: '800', color: colors.text },
   heroSubtitle: { fontSize: 14, color: colors.textMuted },
-
-  warnCard: {
-    flexDirection: 'row',
-    gap: spacing.sm,
-    alignItems: 'flex-start',
-    backgroundColor: colors.warningSoft,
-    borderWidth: 1.5,
-    borderColor: colors.warning,
-    borderRadius: radius.md,
-    padding: spacing.md,
-  },
-  warnText: { flex: 1, fontSize: 12, color: colors.text, lineHeight: 18 },
 
   card: {
     backgroundColor: colors.surface,

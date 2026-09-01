@@ -1,0 +1,167 @@
+name: Build APK và tạo Release
+
+# Chạy khi push tag dạng v* (vd v1.0.2), khi push lên main, hoặc bấm tay.
+#
+# Thay thế luôn workflow "Build APK Android" cũ: nếu để cả hai thì mỗi lần push
+# lên main sẽ build APK hai lần, tốn khoảng 18 phút CI mà kết quả y nhau.
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  workflow_dispatch:
+
+# Cần quyền ghi để tạo/cập nhật Release và tải APK lên
+permissions:
+  contents: write
+
+# Push liên tiếp thì huỷ lượt build cũ, chỉ giữ lượt mới nhất
+concurrency:
+  group: build-and-release-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-and-release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    # Metro nhúng biến EXPO_PUBLIC_* vào bundle NGAY LÚC BUILD. Tệp .env không
+    # được commit (đúng, vì có token), nên nếu không khai ở đây thì bản APK ra
+    # lò sẽ không có URL máy chủ nào và phải chạy Local Mode.
+    #
+    # Hai biến dưới đây KHÔNG phải bí mật: chúng chỉ là địa chỉ công khai. Token
+    # Turso vẫn nằm trong biến môi trường của Vercel, app không bao giờ giữ.
+    env:
+      EXPO_PUBLIC_PROGRESS_API_URL: https://min-hocchoi.vercel.app
+      EXPO_PUBLIC_APK_DOWNLOAD_URL: https://min-silk-iota.vercel.app/api/download-apk
+
+    steps:
+      - name: Lấy code
+        uses: actions/checkout@v4
+
+      - name: Cài Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Cài JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - name: Thiết lập Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Cài dependency
+        run: npm ci
+
+      - name: Kiểm tra TypeScript
+        run: npx tsc --noEmit
+
+      # Push tag thì lấy tên tag; push lên main thì lấy version trong
+      # package.json. Nhờ vậy đẩy nhiều lần lên main sẽ CẬP NHẬT LẠI cùng một
+      # release (vd v1.0.1) chứ không sinh ra hàng chục release rác.
+      - name: Xác định phiên bản và tag
+        id: meta
+        run: |
+          set -euo pipefail
+          PKG_VERSION=$(node -p "require('./package.json').version")
+          if [ "${{ github.ref_type }}" = "tag" ]; then
+            TAG="${{ github.ref_name }}"
+          else
+            TAG="v${PKG_VERSION}"
+          fi
+          VERSION="${TAG#v}"
+          echo "tag=${TAG}"         >> "$GITHUB_OUTPUT"
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "Tag: ${TAG} | version: ${VERSION} | package.json: ${PKG_VERSION}"
+
+          # Cảnh báo khi tag lệch với package.json: app so sánh phiên bản bằng
+          # constants/version.ts nên lệch là người dùng sẽ bị nhắc cập nhật vòng lặp.
+          if [ "$VERSION" != "$PKG_VERSION" ]; then
+            echo "::warning::Tag ${TAG} lệch với version trong package.json (${PKG_VERSION})"
+          fi
+
+      # Sinh thư mục android/ từ app.json. Thư mục này KHÔNG commit vào repo,
+      # nên mỗi lần build đều dựng lại từ config — không bị lệch cấu hình.
+      #
+      # Dùng expo prebuild + gradle chứ không dùng `eas build --local`: cách này
+      # đã chạy thật ổn định ở repo (không cần token Expo, không cần đăng nhập,
+      # nhanh hơn vì tái dùng được cache Gradle).
+      - name: Sinh project Android (expo prebuild)
+        run: npx expo prebuild --platform android --no-install
+
+      - name: Cache Gradle
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: gradle-${{ runner.os }}-${{ hashFiles('android/**/*.gradle*', 'android/gradle/wrapper/gradle-wrapper.properties') }}
+          restore-keys: gradle-${{ runner.os }}-
+
+      # Expo cấu hình sẵn buildType release ký bằng debug.keystore đi kèm,
+      # nên APK ra là đã ký và cài được ngay, không cần thêm secret nào.
+      # Chỉ build cho CPU ARM (điện thoại/tablet thật) để nhẹ và nhanh hơn.
+      - name: Build APK release
+        run: |
+          set -euo pipefail
+          cd android
+          ./gradlew assembleRelease --no-daemon \
+            -PreactNativeArchitectures=arm64-v8a,armeabi-v7a
+
+      # Đổi tên về app-release.apk: đường dẫn tải của app là cố định
+      # (/releases/latest/download/app-release.apk) nên tên file không được đổi
+      # theo phiên bản.
+      - name: Kiểm tra APK và đặt tên chuẩn
+        id: apk
+        run: |
+          set -euo pipefail
+          SRC=$(find android/app/build/outputs/apk/release -name '*.apk' | head -1)
+          echo "APK gốc: $SRC"
+
+          BUILD_TOOLS=$(ls -d "$ANDROID_HOME"/build-tools/* | sort -V | tail -1)
+          "$BUILD_TOOLS/apksigner" verify --print-certs "$SRC"
+          "$BUILD_TOOLS/aapt2" dump badging "$SRC" \
+            | grep -E "^package|application-label|sdkVersion|native-code" || true
+
+          mkdir -p dist-apk
+          cp "$SRC" dist-apk/app-release.apk
+          ls -lh dist-apk/app-release.apk
+          echo "path=dist-apk/app-release.apk" >> "$GITHUB_OUTPUT"
+          echo "✅ APK hợp lệ, đã ký, đã đặt tên app-release.apk"
+
+      # Giữ luôn artifact để tải được ngay từ tab Actions kể cả khi release lỗi
+      - name: Tải APK lên artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: lop3-study-game-apk
+          path: ${{ steps.apk.outputs.path }}
+          if-no-files-found: error
+          retention-days: 30
+
+      # prerelease: false + không phải draft ⇒ GitHub tự trỏ nhãn "latest" vào
+      # release này, nên /releases/latest/download/app-release.apk luôn là bản mới.
+      - name: Tạo hoặc cập nhật GitHub Release
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: ${{ steps.meta.outputs.tag }}
+          name: Học tập & Góc Game Lớp 3 ${{ steps.meta.outputs.tag }}
+          files: ${{ steps.apk.outputs.path }}
+          draft: false
+          prerelease: false
+          make_latest: 'true'
+          body: |
+            ## Bản ${{ steps.meta.outputs.tag }}
+
+            Tải file **app-release.apk** ở dưới, hoặc mở link tải cố định:
+            <https://min-silk-iota.vercel.app/api/download-apk>
+
+            - Commit: ${{ github.sha }}
+            - Build: lượt #${{ github.run_number }}
+            - APK đã ký, hỗ trợ arm64-v8a và armeabi-v7a
+
+            Trong app, vào **Cài đặt → Kiểm tra bản cập nhật** để tải bản này.
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

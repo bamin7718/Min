@@ -1,6 +1,13 @@
 import { Platform } from 'react-native';
 
 import type { AuthSession, ProgressSyncPayload, SyncResult, UserRole } from '../types';
+import {
+  changePinLocal,
+  loginAccountLocal,
+  registerAccountLocal,
+  renameAccountLocal,
+  verifyPinLocal,
+} from './localAuth';
 
 /**
  * Client gọi tới `api/auth` và `api/progress`.
@@ -18,6 +25,13 @@ function apiBase(): string | null {
   return null;
 }
 
+/**
+ * Có máy chủ đồng bộ hay không.
+ *
+ * `false` KHÔNG phải lỗi cấu hình: khi đó app tự chuyển sang Local Mode — tài
+ * khoản và tiến độ lưu trong AsyncStorage của máy (xem `lib/localAuth.ts`).
+ * Mọi hàm dưới đây tự chuyển hướng, nơi gọi không cần rẽ nhánh.
+ */
 export const isApiConfigured = apiBase() !== null;
 
 const TIMEOUT_MS = 20_000;
@@ -49,6 +63,19 @@ async function callApi<T>(options: RequestOptions): Promise<SyncResult<T>> {
       body: options.body === undefined ? undefined : JSON.stringify(options.body),
       signal: controller.signal,
     });
+
+    // Máy chủ có trả lời, nhưng có đúng là API của mình không? Server Metro lúc
+    // `npx expo start` trả về index.html cho MỌI đường dẫn, kèm status 200 —
+    // nếu không nhận ra chỗ này thì app cứ tưởng đã đăng nhập lỗi.
+    const contentType = response.headers.get('content-type') ?? '';
+    const looksLikeApi = contentType.includes('json');
+    if (response.status === 404 || !looksLikeApi) {
+      return {
+        ok: false,
+        error: 'Máy chủ này không có API đồng bộ.',
+        endpointMissing: true,
+      };
+    }
 
     const data = (await response.json().catch(() => null)) as
       | (Record<string, unknown> & { error?: string })
@@ -82,11 +109,15 @@ export async function registerAccount(input: {
   role: UserRole;
   pin?: string;
 }): Promise<SyncResult<AuthSession>> {
+  if (!isApiConfigured) return registerAccountLocal(input);
+
   const result = await callApi<{ session: AuthSession }>({
     method: 'POST',
     path: '/api/auth?action=register',
     body: input,
   });
+  // Máy chủ không có API (vd đang chạy Metro ở localhost) → dùng Local Mode
+  if (!result.ok && result.endpointMissing) return registerAccountLocal(input);
   return result.ok ? { ok: true, data: result.data.session } : result;
 }
 
@@ -94,11 +125,14 @@ export async function loginAccount(input: {
   username: string;
   password: string;
 }): Promise<SyncResult<AuthSession>> {
+  if (!isApiConfigured) return loginAccountLocal(input);
+
   const result = await callApi<{ session: AuthSession }>({
     method: 'POST',
     path: '/api/auth?action=login',
     body: input,
   });
+  if (!result.ok && result.endpointMissing) return loginAccountLocal(input);
   return result.ok ? { ok: true, data: result.data.session } : result;
 }
 
@@ -109,11 +143,17 @@ export async function loginAccount(input: {
 export async function fetchProgress(
   token: string,
 ): Promise<SyncResult<ProgressSyncPayload | null>> {
+  // Local Mode: không có gì trên máy chủ để kéo về, nhưng đây KHÔNG phải lỗi —
+  // trả thành công với dữ liệu rỗng để syncEngine không báo đỏ.
+  if (!isApiConfigured) return { ok: true, data: null };
+
   const result = await callApi<{ progress: ProgressSyncPayload | null }>({
     method: 'GET',
     path: '/api/progress',
     token,
   });
+  // Không có API đồng bộ thì coi như không có gì để kéo — không phải lỗi
+  if (!result.ok && result.endpointMissing) return { ok: true, data: null };
   return result.ok ? { ok: true, data: result.data.progress ?? null } : result;
 }
 
@@ -121,12 +161,17 @@ export async function pushProgress(
   token: string,
   progress: ProgressSyncPayload,
 ): Promise<SyncResult<null>> {
+  // Local Mode: tiến độ đã nằm sẵn trong AsyncStorage nên coi như đẩy xong.
+  if (!isApiConfigured) return { ok: true, data: null };
+
   const result = await callApi<unknown>({
     method: 'PUT',
     path: '/api/progress',
     token,
     body: progress,
   });
+  // Tiến độ đã nằm trong AsyncStorage nên coi như đẩy xong
+  if (!result.ok && result.endpointMissing) return { ok: true, data: null };
   return result.ok ? { ok: true, data: null } : result;
 }
 
@@ -139,12 +184,15 @@ export async function renameAccount(
   token: string,
   username: string,
 ): Promise<SyncResult<string>> {
+  if (!isApiConfigured) return renameAccountLocal(token, username);
+
   const result = await callApi<{ username: string }>({
     method: 'POST',
     path: '/api/account?action=rename',
     token,
     body: { username },
   });
+  if (!result.ok && result.endpointMissing) return renameAccountLocal(token, username);
   return result.ok ? { ok: true, data: result.data.username } : result;
 }
 
@@ -153,12 +201,15 @@ export async function verifyParentPinRemote(
   token: string,
   pin: string,
 ): Promise<SyncResult<null>> {
+  if (!isApiConfigured) return verifyPinLocal(token, pin);
+
   const result = await callApi<unknown>({
     method: 'POST',
     path: '/api/account?action=verify-pin',
     token,
     body: { pin },
   });
+  if (!result.ok && result.endpointMissing) return verifyPinLocal(token, pin);
   return result.ok ? { ok: true, data: null } : result;
 }
 
@@ -168,11 +219,14 @@ export async function changeParentPin(
   oldPin: string,
   newPin: string,
 ): Promise<SyncResult<null>> {
+  if (!isApiConfigured) return changePinLocal(token, oldPin, newPin);
+
   const result = await callApi<unknown>({
     method: 'POST',
     path: '/api/account?action=change-pin',
     token,
     body: { oldPin, newPin },
   });
+  if (!result.ok && result.endpointMissing) return changePinLocal(token, oldPin, newPin);
   return result.ok ? { ok: true, data: null } : result;
 }

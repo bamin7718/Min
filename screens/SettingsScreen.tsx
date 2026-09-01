@@ -40,7 +40,19 @@ interface Message {
   text: string;
 }
 
-export default function SettingsScreen({ onClose }: { onClose: () => void }) {
+/**
+ * @param embedded Màn này mở được từ hai chỗ: modal bánh răng (chiếm cả màn hình
+ *   nên phải tự chừa tai thỏ) và tab "Cài Đặt" (nằm dưới thanh header cố định,
+ *   phần tai thỏ đã được chừa sẵn). `embedded` phân biệt hai trường hợp đó để
+ *   không chừa khoảng trắng hai lần.
+ */
+export default function SettingsScreen({
+  onClose,
+  embedded = false,
+}: {
+  onClose: () => void;
+  embedded?: boolean;
+}) {
   const insets = useSafeAreaInsets();
   const { session } = useAuth();
 
@@ -51,7 +63,12 @@ export default function SettingsScreen({ onClose }: { onClose: () => void }) {
       style={styles.container}
       behavior={Platform.OS === 'ios' ? 'padding' : undefined}
     >
-      <View style={[styles.header, { paddingTop: insets.top + spacing.md }]}>
+      <View
+        style={[
+          styles.header,
+          { paddingTop: (embedded ? 0 : insets.top) + spacing.md },
+        ]}
+      >
         <Pressable
           onPress={onClose}
           accessibilityRole="button"
@@ -468,12 +485,18 @@ function ActionButton({
 }
 
 /** Cổng PIN bọc quanh màn hình Cài đặt cho tài khoản phụ huynh */
-export function SettingsWithPinGate({ onClose }: { onClose: () => void }) {
+export function SettingsWithPinGate({
+  onClose,
+  embedded = false,
+}: {
+  onClose: () => void;
+  embedded?: boolean;
+}) {
   const { session, pinUnlocked } = useAuth();
 
   // Học sinh vào thẳng: mục PIN và cấp giờ vốn đã bị ẩn nên không có gì để bảo vệ
   if (session?.role !== 'parent' || pinUnlocked) {
-    return <SettingsScreen onClose={onClose} />;
+    return <SettingsScreen onClose={onClose} embedded={embedded} />;
   }
   return (
     <PinGate

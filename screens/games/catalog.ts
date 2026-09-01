@@ -27,4 +27,12 @@ export const GAMES: GameInfo[] = [
     color: colors.success,
     softColor: colors.successSoft,
   },
+  {
+    id: 'zombie',
+    name: 'Bắn Zombie',
+    emoji: '🧟',
+    description: 'Bắn zombie lấy vàng, mua súng mới và nâng cấp sức mạnh.',
+    color: '#166534',
+    softColor: '#DCFCE7',
+  },
 ];

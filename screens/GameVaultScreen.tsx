@@ -41,6 +41,7 @@ import { GAMES } from './games/catalog';
 import ColorSortGame from './games/ColorSortGame';
 import MarioMiniGame from './games/MarioMiniGame';
 import PenaltyGame from './games/PenaltyGame';
+import ZombieGame from './games/ZombieGame';
 
 export default function GameVaultScreen() {
   const navigation = useNavigation<BottomTabNavigationProp<RootTabParamList>>();
@@ -49,7 +50,6 @@ export default function GameVaultScreen() {
   const isTablet = width >= TABLET_BREAKPOINT;
 
   const {
-    totalPoints,
     availableSeconds,
     availableMinutes,
     isPlaying,
@@ -136,7 +136,9 @@ export default function GameVaultScreen() {
           styles.content,
           isTablet && styles.contentTablet,
           {
-            paddingTop: insets.top + spacing.lg,
+            // Không cộng insets.top: thanh header cố định ở App.tsx đã chừa phần
+            // tai thỏ / thanh trạng thái rồi, cộng thêm lần nữa là thừa khoảng trắng.
+            paddingTop: spacing.md,
             paddingBottom: insets.bottom + TAB_BAR_SPACE,
           },
         ]}
@@ -144,16 +146,10 @@ export default function GameVaultScreen() {
         showsVerticalScrollIndicator={false}
       >
         <View style={styles.headerRow}>
-          <View>
-            <Text style={styles.headerTitle}>Góc Game 🎮</Text>
-            <Text style={styles.headerSubtitle}>
-              Thời gian chơi được đổi từ việc học bài
-            </Text>
-          </View>
-          <View style={styles.pointChip}>
-            <Text style={styles.pointChipEmoji}>⭐</Text>
-            <Text style={styles.pointChipText}>{hydrated ? totalPoints : '…'}</Text>
-          </View>
+          <Text style={styles.headerTitle}>Góc Game 🎮</Text>
+          <Text style={styles.headerSubtitle}>
+            Thời gian chơi được đổi từ việc học bài
+          </Text>
         </View>
 
         {/* ----- Đồng hồ đếm ngược ----- */}
@@ -238,6 +234,7 @@ export default function GameVaultScreen() {
         {activeGame === 'mario-mini' && <MarioMiniGame onExit={closeGame} />}
         {activeGame === 'color-sort' && <ColorSortGame onExit={closeGame} />}
         {activeGame === 'penalty' && <PenaltyGame onExit={closeGame} />}
+        {activeGame === 'zombie' && <ZombieGame onExit={closeGame} />}
       </Modal>
     </KeyboardAvoidingView>
   );
@@ -555,7 +552,9 @@ function StudentNote() {
 
 /** Nhãn trạng thái đồng bộ hiển thị cho phụ huynh */
 const SYNC_TEXT: Record<SyncState, string> = {
-  disabled: 'Chưa cấu hình máy chủ — chỉ lưu trên máy',
+  // Không gọi là "chưa cấu hình": với gia đình chỉ dùng một máy thì đây là
+  // chế độ chạy bình thường, không phải thiếu sót cần sửa.
+  disabled: 'Chế độ lưu trên máy (Local Mode)',
   signedOut: 'Chưa đăng nhập',
   idle: 'Đã lưu trên máy',
   offline: 'Đang offline — sẽ tự đồng bộ khi có mạng',
@@ -590,24 +589,9 @@ const styles = StyleSheet.create({
     padding: spacing.xl,
   },
 
-  headerRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-  },
-  headerTitle: { fontSize: 24, fontWeight: '800', color: colors.text },
+  headerRow: {},
+  headerTitle: { fontSize: 22, fontWeight: '800', color: colors.text },
   headerSubtitle: { fontSize: 13, color: colors.textMuted, marginTop: 2 },
-  pointChip: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: spacing.xs,
-    backgroundColor: colors.warningSoft,
-    paddingHorizontal: spacing.md,
-    paddingVertical: spacing.sm,
-    borderRadius: radius.pill,
-  },
-  pointChipEmoji: { fontSize: 15 },
-  pointChipText: { fontWeight: '800', color: colors.text, fontSize: 15 },
 
   // Đồng hồ
   clockCard: {

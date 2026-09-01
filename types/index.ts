@@ -117,7 +117,18 @@ export type SyncState =
   | 'error';
 
 /** Kết quả một lời gọi tới Supabase */
-export type SyncResult<T> = { ok: true; data: T } | { ok: false; error: string };
+export type SyncResult<T> =
+  | { ok: true; data: T }
+  | {
+      ok: false;
+      error: string;
+      /**
+       * `true` khi máy chủ trả lời nhưng KHÔNG có endpoint đó (vd server Metro
+       * lúc `npx expo start` trả về trang HTML cho mọi đường dẫn). Khác hẳn lỗi
+       * mạng: lúc đó app chuyển sang Local Mode chứ không báo "mất mạng".
+       */
+      endpointMissing?: true;
+    };
 
 /** Vai trò tài khoản */
 export type UserRole = 'student' | 'parent';
@@ -172,7 +183,7 @@ export interface WeekTopic {
 }
 
 /** Các trò chơi tích hợp trong Góc Game */
-export type GameId = 'mario-mini' | 'color-sort' | 'penalty';
+export type GameId = 'mario-mini' | 'color-sort' | 'penalty' | 'zombie';
 
 /** Thông tin hiển thị của một trò chơi trên lưới Góc Game */
 export interface GameInfo {

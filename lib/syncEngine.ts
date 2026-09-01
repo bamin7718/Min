@@ -118,6 +118,11 @@ class SyncEngine {
    * Hàm này KHÔNG await việc đẩy — gọi xong là trả về liền cho UI.
    */
   queueProgress(userId: string, token: string, payload: ProgressSyncPayload): void {
+    // Local Mode: tiến độ đã được ghi thẳng vào AsyncStorage nên không có gì
+    // phải xếp hàng. Nếu vẫn xếp thì bảng trạng thái sẽ treo mãi "1 chờ" và
+    // phụ huynh tưởng app đang lỗi đồng bộ.
+    if (!isApiConfigured) return;
+
     void (async () => {
       const pending = await enqueueProgress({
         userId,
@@ -135,7 +140,9 @@ class SyncEngine {
 
   /** Tải tiến độ từ server. Dùng khi mở app / đổi tài khoản. */
   async pull(token: string): Promise<SyncResult<ProgressSyncPayload | null>> {
-    if (!isApiConfigured) return { ok: false, error: 'Chưa cấu hình máy chủ.' };
+    // Local Mode: coi như kéo xong và không có gì trên máy chủ. Trả `ok: true`
+    // để nơi gọi không hiểu lầm là lỗi mạng.
+    if (!isApiConfigured) return { ok: true, data: null };
     if (!this.state.online) return { ok: false, error: 'Đang offline.' };
 
     this.setStatus('syncing');

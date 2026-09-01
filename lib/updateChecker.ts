@@ -7,10 +7,11 @@ import { APP_VERSION, compareVersions } from '../constants/version';
  *
  * Nguồn dữ liệu, theo thứ tự ưu tiên:
  *  1. `EXPO_PUBLIC_UPDATE_SERVER_URL` — một endpoint trả JSON
- *  2. `EXPO_PUBLIC_PROGRESS_API_URL` + `/api/version` — bảng `app_version` trên Turso
+ *  2. `EXPO_PUBLIC_PROGRESS_API_URL` + `/api/check-version` — đọc GitHub Releases
+ *  3. Bản web: `/api/check-version` cùng origin
  *
- * JSON chấp nhận cả snake_case lẫn camelCase:
- * `{ version, apk_url, force_update, release_notes }`
+ * JSON chấp nhận cả snake_case lẫn camelCase, và cả hai cách gọi tên link tải:
+ * `{ version, apk_url | apkUrl | downloadUrl, force_update, release_notes }`
  */
 
 export interface UpdateInfo {
@@ -45,11 +46,14 @@ function endpoint(): string | null {
   const direct = process.env.EXPO_PUBLIC_UPDATE_SERVER_URL?.trim();
   if (direct) return direct;
 
+  // Mặc định hỏi /api/check-version: nó đọc thẳng GitHub Releases nên workflow
+  // build xong là thông tin tự đúng. Còn /api/version đọc bảng app_version trên
+  // Turso, phải cập nhật tay sau mỗi lần phát hành nên dễ bị bỏ quên.
   const apiBase = process.env.EXPO_PUBLIC_PROGRESS_API_URL?.trim();
-  if (apiBase) return `${apiBase.replace(/\/+$/, '')}/api/version`;
+  if (apiBase) return `${apiBase.replace(/\/+$/, '')}/api/check-version`;
 
   // Bản web nằm cùng origin với serverless function
-  if (Platform.OS === 'web') return '/api/version';
+  if (Platform.OS === 'web') return '/api/check-version';
   return null;
 }
 
@@ -62,12 +66,18 @@ function parseInfo(raw: unknown): UpdateInfo | null {
   const version = typeof data.version === 'string' ? data.version.trim() : '';
   if (!/^\d+(\.\d+)*$/.test(version.replace(/^v/i, ''))) return null;
 
+  // Chấp nhận cả ba cách đặt tên: api/version.ts trả `apk_url`, còn
+  // api/check-version.ts (đọc từ GitHub Releases) trả `downloadUrl`.
   const apkUrl =
     typeof data.apk_url === 'string'
       ? data.apk_url
       : typeof data.apkUrl === 'string'
         ? data.apkUrl
-        : '';
+        : typeof data.downloadUrl === 'string'
+          ? data.downloadUrl
+          : typeof data.download_url === 'string'
+            ? data.download_url
+            : '';
 
   const notes =
     typeof data.release_notes === 'string'
