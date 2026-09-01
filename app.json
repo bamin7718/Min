@@ -1,8 +1,8 @@
 {
   "expo": {
-    "name": "Học tập & Góc Game Lớp 3",
+    "name": "Min Education Gamification",
     "slug": "lop3-study-game",
-    "version": "1.0.2",
+    "version": "1.0.3",
     "orientation": "default",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "light",
@@ -19,7 +19,8 @@
       "predictiveBackGestureEnabled": false,
       "softwareKeyboardLayoutMode": "pan",
       "package": "com.bamin7718.lop3studygame",
-      "versionCode": 3
+      "versionCode": 3,
+      "appName": "Min EG"
     },
     "web": {
       "favicon": "./assets/favicon.png"

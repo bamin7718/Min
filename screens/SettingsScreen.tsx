@@ -26,6 +26,7 @@ import {
   touch,
 } from '../constants/theme';
 import { APP_VERSION } from '../constants/version';
+import { BRAND_FOOTER } from '../constants/brand';
 import { useAuth } from '../context/AuthContext';
 import { usePlaytime } from '../context/PlaytimeContext';
 import { checkAppUpdate, type UpdateInfo } from '../lib/updateChecker';
@@ -102,7 +103,7 @@ export default function SettingsScreen({
         <SignOutSection onClose={onClose} />
 
         <Text style={styles.footerVersion}>
-          📚🎮 Học tập & Góc Game Lớp 3 · v{APP_VERSION}
+          {BRAND_FOOTER}
         </Text>
       </ScrollView>
     </KeyboardAvoidingView>

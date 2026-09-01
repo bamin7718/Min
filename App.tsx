@@ -18,6 +18,8 @@ import {
 } from 'react-native';
 import { SafeAreaProvider, useSafeAreaInsets } from 'react-native-safe-area-context';
 
+import AppIcon from './components/AppIcon';
+import { BRAND_SHORT, BRAND_TAGLINE } from './constants/brand';
 import { colors, elevation, radius, spacing, touch } from './constants/theme';
 import { APP_VERSION } from './constants/version';
 import { checkAppUpdate, type UpdateInfo } from './lib/updateChecker';
@@ -378,21 +380,24 @@ function AccountBar({ onOpenSettings }: { onOpenSettings: () => void }) {
 
   return (
     <View style={[styles.accountBar, { paddingTop: insets.top + spacing.sm }]}>
-      {/* Avatar: chữ cái đầu của tên, kèm đốm nhỏ báo trạng thái đồng bộ */}
-      <View style={[styles.avatar, isParent && styles.avatarParent]}>
-        <Text style={styles.avatarText}>
-          {session.username.charAt(0).toUpperCase()}
-        </Text>
+      {/* Logo thương hiệu, kèm đốm nhỏ báo trạng thái đồng bộ */}
+      <View style={styles.logoWrap}>
+        <AppIcon size={34} withBadge={false} />
         <View style={[styles.syncDot, { backgroundColor: syncColor }]} />
       </View>
 
       <View style={styles.accountTextGroup}>
-        <Text style={styles.accountName} numberOfLines={1}>
-          {session.username}
+        <Text style={styles.brandName} numberOfLines={1}>
+          {BRAND_SHORT}
         </Text>
-        <Text style={[styles.roleBadge, isParent && styles.roleBadgeParent]}>
-          {isParent ? '👨‍👩‍👧 Phụ huynh' : '🧑‍🎓 Học sinh'}
-        </Text>
+        <View style={styles.accountRow}>
+          <Text style={styles.accountName} numberOfLines={1}>
+            {session.username}
+          </Text>
+          <Text style={[styles.roleBadge, isParent && styles.roleBadgeParent]}>
+            {isParent ? '👨‍👩‍👧 Phụ huynh' : '🧑‍🎓 Học sinh'}
+          </Text>
+        </View>
       </View>
 
       {/* Điểm tích luỹ */}
@@ -424,8 +429,9 @@ function AccountBar({ onOpenSettings }: { onOpenSettings: () => void }) {
 function SplashScreen({ label }: { label: string }) {
   return (
     <View style={styles.splash}>
-      <Text style={styles.splashEmoji}>📚🎮</Text>
-      <Text style={styles.splashTitle}>Học tập & Góc Game Lớp 3</Text>
+      <AppIcon size={104} />
+      <Text style={styles.splashTitle}>{BRAND_SHORT}</Text>
+      <Text style={styles.splashSubtitle}>{BRAND_TAGLINE}</Text>
       <ActivityIndicator color={colors.primary} style={styles.splashSpinner} />
       <Text style={styles.splashLabel}>{label}</Text>
     </View>
@@ -447,18 +453,7 @@ const styles = StyleSheet.create({
     borderBottomRightRadius: radius.lg,
     ...elevation(2),
   },
-  avatar: {
-    width: 36,
-    height: 36,
-    borderRadius: radius.pill,
-    backgroundColor: 'rgba(255,255,255,0.24)',
-    borderWidth: 2,
-    borderColor: 'rgba(255,255,255,0.5)',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  avatarParent: { backgroundColor: 'rgba(251,191,36,0.32)', borderColor: '#FCD34D' },
-  avatarText: { color: colors.textOnPrimary, fontSize: 16, fontWeight: '800' },
+  logoWrap: { width: 34, height: 34 },
   /** Đốm báo đồng bộ nằm ở góc avatar để không chiếm thêm chỗ trên hàng */
   syncDot: {
     position: 'absolute',
@@ -472,7 +467,14 @@ const styles = StyleSheet.create({
   },
 
   accountTextGroup: { flex: 1, gap: 1, minWidth: 0 },
-  accountName: { color: colors.textOnPrimary, fontSize: 14, fontWeight: '800' },
+  brandName: {
+    color: colors.textOnPrimary,
+    fontSize: 15,
+    fontWeight: '800',
+    letterSpacing: 0.3,
+  },
+  accountRow: { flexDirection: 'row', alignItems: 'center', gap: 6, minWidth: 0 },
+  accountName: { color: '#C7D2FE', fontSize: 11, fontWeight: '700', flexShrink: 1 },
 
   statChip: {
     flexDirection: 'row',
@@ -568,8 +570,14 @@ const styles = StyleSheet.create({
     backgroundColor: colors.background,
     gap: spacing.md,
   },
-  splashEmoji: { fontSize: 44 },
-  splashTitle: { fontSize: 18, fontWeight: '800', color: colors.text },
+  splashTitle: {
+    fontSize: 26,
+    fontWeight: '800',
+    color: colors.primaryDark,
+    letterSpacing: 0.5,
+    marginTop: spacing.sm,
+  },
+  splashSubtitle: { fontSize: 13, color: colors.textMuted },
   splashSpinner: { marginTop: spacing.sm },
   splashLabel: { fontSize: 13, color: colors.textMuted },
 

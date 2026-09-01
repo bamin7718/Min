@@ -1,0 +1,48 @@
+#!/bin/sh
+#
+# Min EG — tự tăng số phiên bản mỗi lần commit.
+#
+# Hook này nằm trong repo (không nằm ở .git/hooks) và được bật bằng
+#   git config core.hooksPath .githooks
+# lệnh đó chạy tự động qua `npm run prepare` sau mỗi `npm install`.
+#
+# Bỏ qua lần này:  SKIP_BUMP=1 git commit -m "..."
+#
+# LƯU Ý về `git commit --amend`: git KHÔNG cho hook biết đang amend, và lúc đó
+# `git diff --cached` so với chính commit đang sửa nên tệp version.ts hiện ra là
+# "không đổi" — hook sẽ tăng thêm một lần nữa. Muốn amend mà giữ nguyên số
+# phiên bản thì dùng:
+#   SKIP_BUMP=1 git commit --amend --no-edit
+
+set -e
+
+if [ "${SKIP_BUMP}" = "1" ]; then
+  echo "⏭️  [Min EG] SKIP_BUMP=1 — giữ nguyên số phiên bản"
+  exit 0
+fi
+
+GIT_DIR_PATH=$(git rev-parse --git-dir)
+
+# Đang merge / rebase / cherry-pick thì KHÔNG tăng: mỗi commit được phát lại sẽ
+# tăng thêm một lần, số phiên bản nhảy vọt mà chẳng có bản phát hành nào tương ứng.
+for marker in MERGE_HEAD REBASE_HEAD CHERRY_PICK_HEAD BISECT_LOG rebase-merge rebase-apply; do
+  if [ -e "${GIT_DIR_PATH}/${marker}" ]; then
+    echo "⏭️  [Min EG] Đang ${marker} — giữ nguyên số phiên bản"
+    exit 0
+  fi
+done
+
+# Nếu chính commit này đã sửa số phiên bản (ví dụ đang `git commit --amend` sau
+# một lần bump, hoặc tự sửa tay) thì đừng tăng thêm lần nữa.
+if git diff --cached --name-only | grep -qx "constants/version.ts"; then
+  echo "⏭️  [Min EG] Commit này đã có thay đổi số phiên bản — không tăng thêm"
+  exit 0
+fi
+
+node scripts/bump-version.js || exit 1
+
+# Đưa ba tệp vừa sửa vào chính commit này
+git add package.json app.json constants/version.ts
+
+NEW_VERSION=$(node -p "require('./package.json').version")
+echo "📌 [Min EG] Đã thêm package.json, app.json, constants/version.ts (v${NEW_VERSION}) vào commit"

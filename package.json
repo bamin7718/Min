@@ -1,6 +1,6 @@
 {
-  "name": "lop3-study-game",
-  "version": "1.0.2",
+  "name": "min-eg",
+  "version": "1.0.3",
   "main": "index.ts",
   "dependencies": {
     "@expo/vector-icons": "^15.0.2",
@@ -32,10 +32,18 @@
     "android": "expo start --android",
     "ios": "expo start --ios",
     "web": "expo start --web",
-    "build": "expo export --platform web"
+    "build": "expo export --platform web",
+    "bump-version": "node scripts/bump-version.js",
+    "bump-minor": "node scripts/bump-version.js minor",
+    "bump-major": "node scripts/bump-version.js major",
+    "check-version": "node scripts/bump-version.js --check",
+    "generate-icons": "node scripts/generate-icons.mjs",
+    "prepare": "git config core.hooksPath .githooks || true"
   },
   "private": true,
   "engines": {
     "node": ">=20.0.0"
-  }
+  },
+  "displayName": "Min Education Gamification",
+  "description": "Min EG — Min Education Gamification: học tập & góc game cho học sinh Lớp 3"
 }

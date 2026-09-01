@@ -15,7 +15,8 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { colors, radius, spacing } from '../constants/theme';
-import { APP_VERSION } from '../constants/version';
+import { BRAND_FOOTER, BRAND_SHORT, BRAND_TAGLINE } from '../constants/brand';
+import AppIcon from '../components/AppIcon';
 import { useAuth } from '../context/AuthContext';
 import type { UserRole } from '../types';
 
@@ -97,9 +98,9 @@ export default function AuthScreen() {
         showsVerticalScrollIndicator={false}
       >
         <View style={styles.hero}>
-          <Text style={styles.heroEmoji}>📚🎮</Text>
-          <Text style={styles.heroTitle}>Học tập & Góc Game</Text>
-          <Text style={styles.heroSubtitle}>Dành cho học sinh Lớp 3</Text>
+          <AppIcon size={96} />
+          <Text style={styles.heroTitle}>{BRAND_SHORT}</Text>
+          <Text style={styles.heroSubtitle}>{BRAND_TAGLINE}</Text>
         </View>
 
         {/*
@@ -271,7 +272,7 @@ export default function AuthScreen() {
           </Text>
         </View>
 
-        <Text style={styles.versionLabel}>Phiên bản v{APP_VERSION}</Text>
+        <Text style={styles.versionLabel}>{BRAND_FOOTER}</Text>
       </ScrollView>
     </KeyboardAvoidingView>
   );
@@ -319,9 +320,13 @@ const styles = StyleSheet.create({
     alignSelf: 'center',
   },
 
-  hero: { alignItems: 'center', gap: spacing.xs },
-  heroEmoji: { fontSize: 48 },
-  heroTitle: { fontSize: 24, fontWeight: '800', color: colors.text },
+  hero: { alignItems: 'center', gap: spacing.sm },
+  heroTitle: {
+    fontSize: 30,
+    fontWeight: '800',
+    color: colors.primaryDark,
+    letterSpacing: 0.5,
+  },
   heroSubtitle: { fontSize: 14, color: colors.textMuted },
 
   card: {
