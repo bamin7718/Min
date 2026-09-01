@@ -144,7 +144,15 @@ export default async function handler(request: Request): Promise<Response> {
 
     return json({ error: 'action phải là "register" hoặc "login".' }, 400);
   } catch (error) {
+    // Khối try này bọc cả phần băm mật khẩu lẫn truy vấn database, nên thông
+    // báo phải trung tính thay vì đổ oan cho database.
     console.error('[api/auth]', error);
-    return json({ error: 'Không truy cập được database.' }, 502);
+    return json(
+      {
+        error: 'Máy chủ gặp sự cố khi xử lý yêu cầu. Vui lòng thử lại sau.',
+        chiTiet: error instanceof Error ? error.message.slice(0, 200) : undefined,
+      },
+      502,
+    );
   }
 }

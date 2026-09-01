@@ -1,5 +1,5 @@
-import { sessionSecret } from '../lib/authCrypto';
-import { createTursoClient, serverTursoConfig } from '../lib/turso';
+import { hashSecret, sessionSecret, verifySecret } from '../lib/authCrypto';
+import { createTursoClient, createUser, serverTursoConfig } from '../lib/turso';
 
 /**
  * Endpoint chẩn đoán cấu hình server.
@@ -98,6 +98,38 @@ export default async function handler(): Promise<Response> {
       report.hoTroTransaction = false;
       report.lyDoKhongCoTransaction =
         error instanceof Error ? error.message.slice(0, 150) : String(error);
+    }
+
+    // Thử ĐÚNG từng bước của luồng đăng ký, để biết bước nào hỏng thật
+    try {
+      const started = Date.now();
+      const hash = await hashSecret('mat-khau-thu');
+      report.bamMatKhau = (await verifySecret('mat-khau-thu', hash)) ? 'OK' : 'SAI';
+      report.bamMatKhauMs = Date.now() - started;
+    } catch (error) {
+      report.bamMatKhau = 'THẤT BẠI';
+      report.loiBamMatKhau = error instanceof Error ? error.message.slice(0, 200) : String(error);
+    }
+
+    try {
+      const probeId = `zz-health-${Date.now()}`;
+      const created = await createUser(
+        client,
+        {
+          id: probeId,
+          username: probeId,
+          passwordHash: 'pbkdf2$1000$c2FsdA==$aGFzaA==',
+          role: 'student',
+          pinHash: null,
+        },
+        `${probeId}-p`,
+      );
+      await client.execute({ sql: 'DELETE FROM user_progress WHERE user_id = ?', args: [probeId] });
+      await client.execute({ sql: 'DELETE FROM users WHERE id = ?', args: [probeId] });
+      report.taoUserThu = created ? 'OK (đã dọn)' : 'TRẢ VỀ FALSE';
+    } catch (error) {
+      report.taoUserThu = 'THẤT BẠI';
+      report.loiTaoUser = error instanceof Error ? error.message.slice(0, 300) : String(error);
     }
 
     return json(report);
