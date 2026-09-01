@@ -44,3 +44,7 @@ yarn-error.*
 
 # Thư mục tạm do tsc tạo ra khi chạy kiểm thử (không phải mã nguồn)
 .tsout-*/
+
+# Thư mục xuất bundle cho bản cập nhật ngầm (OTA) — do CI sinh ra
+dist-ota/
+manifests/

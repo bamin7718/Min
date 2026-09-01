@@ -29,6 +29,12 @@ import { APP_VERSION } from '../constants/version';
 import { useAuth } from '../context/AuthContext';
 import { usePlaytime } from '../context/PlaytimeContext';
 import { checkAppUpdate, type UpdateInfo } from '../lib/updateChecker';
+import {
+  checkOta,
+  downloadAndApplyOta,
+  isOtaSupported,
+  runningUpdateLabel,
+} from '../lib/otaUpdates';
 import PinGate from './PinGate';
 import UpdateModal from './UpdateModal';
 
@@ -272,6 +278,48 @@ function UpdateSection() {
   const [message, setMessage] = useState<Message | null>(null);
   const [checking, setChecking] = useState(false);
   const [found, setFound] = useState<UpdateInfo | null>(null);
+  const [otaBusy, setOtaBusy] = useState(false);
+
+  /**
+   * Kiểm tra bản CẬP NHẬT NHANH (chỉ phần JavaScript).
+   *
+   * Khác hẳn nút tải APK ngay dưới: bản này vài megabyte, tải xong app tự mở
+   * lại; còn APK là cài lại cả ứng dụng, chỉ cần khi phần native thay đổi.
+   */
+  const quickUpdate = useCallback(async () => {
+    setOtaBusy(true);
+    setMessage(null);
+
+    const found = await checkOta();
+    if (found.status === 'unsupported') {
+      setOtaBusy(false);
+      setMessage({
+        type: 'error',
+        text: 'Cập nhật nhanh chỉ hoạt động trên bản app đã cài (APK).',
+      });
+      return;
+    }
+    if (found.status === 'up-to-date') {
+      setOtaBusy(false);
+      setMessage({ type: 'ok', text: 'Bạn đang dùng bản mới nhất!' });
+      return;
+    }
+    if (found.status === 'error') {
+      setOtaBusy(false);
+      setMessage({
+        type: 'error',
+        text: found.error ?? 'Không hỏi được máy chủ cập nhật.',
+      });
+      return;
+    }
+
+    // Có bản mới: tải rồi mở lại app luôn. Thành công thì code dưới không chạy tới.
+    const applied = await downloadAndApplyOta();
+    setOtaBusy(false);
+    if (applied.status === 'error') {
+      setMessage({ type: 'error', text: applied.error ?? 'Cập nhật thất bại.' });
+    }
+  }, []);
 
   const check = useCallback(async () => {
     setChecking(true);
@@ -324,7 +372,24 @@ function UpdateSection() {
         <Text style={styles.versionValue}>v{APP_VERSION}</Text>
       </View>
 
+      {isOtaSupported() && (
+        <View style={styles.versionRow}>
+          <Text style={styles.versionLabel}>Bản đang chạy</Text>
+          <Text style={styles.versionValue}>{runningUpdateLabel()}</Text>
+        </View>
+      )}
+
       {message && <Message message={message} />}
+
+      {/* Cập nhật nhanh: chỉ tải phần mới, đặt lên trước vì gần như lúc nào cũng
+          là cách nên dùng — tải APK chỉ cần khi phần native thay đổi. */}
+      <ActionButton
+        label={otaBusy ? 'Đang cập nhật nhanh...' : '⚡ Cập nhật nhanh (không cần tải lại app)'}
+        icon="flash-outline"
+        busy={otaBusy}
+        onPress={() => void quickUpdate()}
+        accessibilityLabel="Cập nhật nhanh"
+      />
 
       <ActionButton
         label={checking ? 'Đang kiểm tra...' : 'Kiểm tra bản cập nhật'}

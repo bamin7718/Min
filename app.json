@@ -2,7 +2,7 @@
   "expo": {
     "name": "Học tập & Góc Game Lớp 3",
     "slug": "lop3-study-game",
-    "version": "1.0.1",
+    "version": "1.0.2",
     "orientation": "default",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "light",
@@ -19,7 +19,7 @@
       "predictiveBackGestureEnabled": false,
       "softwareKeyboardLayoutMode": "pan",
       "package": "com.bamin7718.lop3studygame",
-      "versionCode": 2
+      "versionCode": 3
     },
     "web": {
       "favicon": "./assets/favicon.png"
@@ -27,6 +27,14 @@
     "plugins": [
       "expo-asset",
       "expo-font"
-    ]
+    ],
+    "updates": {
+      "url": "https://min-silk-iota.vercel.app/api/manifest",
+      "checkAutomatically": "ON_LOAD",
+      "fallbackToCacheTimeout": 0
+    },
+    "runtimeVersion": {
+      "policy": "fingerprint"
+    }
   }
 }

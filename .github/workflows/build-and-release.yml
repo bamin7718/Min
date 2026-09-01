@@ -20,6 +20,121 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # ------------------------------------------------------------------
+  # Phát hành bản CẬP NHẬT NGẦM (OTA)
+  #
+  # Chỉ đóng gói phần JavaScript và hình ảnh rồi đẩy lên nhánh `ota`. Máy đã cài
+  # app sẽ tự tải phần này về mà KHÔNG phải cài lại APK.
+  #
+  # Job này nhẹ (khoảng 2 phút, không cần Android SDK) nên chạy riêng và chạy
+  # song song với job build APK.
+  # ------------------------------------------------------------------
+  publish-ota:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    env:
+      EXPO_PUBLIC_PROGRESS_API_URL: https://min-hocchoi.vercel.app
+      EXPO_PUBLIC_APK_DOWNLOAD_URL: https://min-silk-iota.vercel.app/api/download-apk
+
+    steps:
+      - name: Lấy code
+        uses: actions/checkout@v4
+
+      - name: Cài Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Cài dependency
+        run: npm ci
+
+      # runtimeVersion theo chính sách fingerprint: Expo băm toàn bộ phần native
+      # (danh sách thư viện, cấu hình). Sửa JavaScript thì chuỗi này KHÔNG đổi nên
+      # bản OTA vẫn hợp với APK đang cài; thêm thư viện native thì nó đổi và máy
+      # cũ tự động không nhận bản OTA không hợp — thay vì nhận rồi crash.
+      - name: Lấy runtimeVersion
+        id: rv
+        run: |
+          set -euo pipefail
+          RV=$(npx expo-updates runtimeversion:resolve --platform android \
+            | node -e "let s='';process.stdin.on('data',d=>s+=d).on('end',()=>console.log(JSON.parse(s).runtimeVersion))")
+          echo "value=${RV}" >> "$GITHUB_OUTPUT"
+          echo "runtimeVersion: ${RV}"
+
+      - name: Đóng gói JavaScript cho Android
+        run: npx expo export --platform android --output-dir dist-ota
+
+      - name: Sinh manifest theo giao thức Expo Updates
+        run: |
+          set -euo pipefail
+          node scripts/build-ota-manifest.mjs \
+            --export-dir dist-ota \
+            --platform android \
+            --runtime-version "${{ steps.rv.outputs.value }}" \
+            --base-url https://min-silk-iota.vercel.app \
+            --out "manifests/manifest-android-${{ steps.rv.outputs.value }}.json"
+
+      # Nhánh `ota` là nhánh rời (orphan), không dính vào lịch sử của main — nhờ
+      # vậy main không bị phình vì mấy megabyte bundle mỗi lần phát hành.
+      - name: Đẩy bundle và manifest lên nhánh ota
+        run: |
+          set -euo pipefail
+          RV="${{ steps.rv.outputs.value }}"
+
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          # Dựng nội dung nhánh ota trong một thư mục tạm
+          rm -rf /tmp/ota && mkdir -p "/tmp/ota/${RV}" /tmp/ota/manifests
+          cp -r dist-ota/. "/tmp/ota/${RV}/"
+          cp -r manifests/. /tmp/ota/manifests/
+
+          # Giữ lại các bản OTA cũ của những runtimeVersion khác: máy chưa kịp
+          # cập nhật APK vẫn phải tải được bản hợp với nó.
+          if git fetch origin ota --depth 1 2>/dev/null; then
+            # --detach: origin/ota là ref từ xa, không có --detach thì git đòi tạo nhánh cục bộ
+            git worktree add --detach /tmp/ota-old origin/ota
+            for dir in /tmp/ota-old/*/ ; do
+              name=$(basename "$dir")
+              [ "$name" = "manifests" ] && continue
+              [ "$name" = "$RV" ] && continue
+              cp -r "$dir" "/tmp/ota/${name}"
+            done
+            # Manifest của runtimeVersion khác cũng phải giữ
+            for f in /tmp/ota-old/manifests/*.json; do
+              [ -e "$f" ] || continue
+              base=$(basename "$f")
+              [ -e "/tmp/ota/manifests/$base" ] || cp "$f" "/tmp/ota/manifests/$base"
+            done
+            git worktree remove /tmp/ota-old --force
+          else
+            echo "Chưa có nhánh ota — đây là lần phát hành đầu tiên"
+          fi
+
+          # Nhánh rời: mỗi lần phát hành là một commit duy nhất, không giữ lịch sử
+          git checkout --orphan ota-tmp
+          git rm -rq --cached . || true
+          find . -maxdepth 1 -mindepth 1 ! -name '.git' -exec rm -rf {} +
+          cp -r /tmp/ota/. .
+
+          git add -A
+          git commit -m "OTA cho runtimeVersion ${RV} (commit ${GITHUB_SHA::7})"
+          git push --force origin ota-tmp:ota
+
+          echo "✅ Đã đẩy bản OTA cho runtimeVersion ${RV}"
+          ls -la "${RV}" | head -5
+          ls -la manifests
+
+      - name: Tải manifest lên artifact để soi khi cần
+        uses: actions/upload-artifact@v4
+        with:
+          name: ota-manifest
+          path: manifests/*.json
+          if-no-files-found: error
+          retention-days: 30
+
   build-and-release:
     runs-on: ubuntu-latest
     timeout-minutes: 45
