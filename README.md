@@ -39,6 +39,7 @@ Sau đó:
 | `screens/games/GameShell.tsx` | Khung chung: đồng hồ trong game, nút thoát, lớp phủ tạm dừng |
 | `screens/games/MarioMiniGame.tsx` | Runner: chạy tự động, 2 nút trái/phải + nút nhảy, né nấm/hố, ăn tiền vàng |
 | `screens/games/ColorSortGame.tsx` | Giao diện trò chơi sắp xếp màu |
+| `screens/games/PenaltyGame.tsx` | Đá penalty: chọn 1 trong 6 góc sút, thủ môn đổ người ngẫu nhiên |
 | `screens/games/colorSortLogic.ts` | Logic thuần của trò sắp xếp màu (sinh đề, luật đi, điều kiện thắng) |
 | `screens/AuthScreen.tsx` | Đăng nhập/đăng ký, trạng thái đồng bộ, đăng xuất (mở từ khu vực phụ huynh) |
 | `types/index.ts` | `Question`, `UserProgress`, `QuizResult`, `Subject`, … |
@@ -101,9 +102,9 @@ rất khó phân bố đáp án đều — bản đầu của lộ trình Toán 
 3/125 lần**, học sinh hoàn toàn có thể đoán theo vị trí. Trộn khi tạo đề đưa phân bố
 về đều (lệch tối đa 2.8% so với 25%) và khiến làm lại cùng một câu không đoán được.
 
-## Góc Game — 2 trò chơi tích hợp
+## Góc Game — 3 trò chơi tích hợp
 
-Khi còn thời gian khả dụng, Góc Game hiện **lưới 2 cột** gồm các ô trò chơi (icon,
+Khi còn thời gian khả dụng, Góc Game hiện **lưới 2 cột** gồm 3 ô trò chơi (icon,
 tên, nút "Chơi ngay"). Hết giờ thì lưới bị ẩn và thay bằng màn hình khoá.
 
 ### Mario Mini (`screens/games/MarioMiniGame.tsx`)
@@ -134,6 +135,22 @@ sang `colorSortLogic.ts` để kiểm thử riêng bằng solver BFS.
 > Độ khó chững lại sau màn 3: không gian trạng thái của 4 màu / 5 ống là hữu hạn nên
 > tăng số bước xáo trộn không làm đề dài thêm (trung vị ~7–8 nước đi). Muốn khó hơn
 > nữa thì phải thêm màu thứ 5 (6 ống), lúc đó lưới ống sẽ chật trên màn hình điện thoại.
+
+### Đá Penalty (`screens/games/PenaltyGame.tsx`)
+
+- Khung thành, thủ môn và bóng ở chấm 11m, vẽ bằng `View` + `Animated` thuần.
+- Học sinh **chạm chọn 1 trong 6 góc sút** (trái/giữa/phải × trên/dưới). Thủ môn
+  đổ người ngẫu nhiên, không biết trước cú sút.
+- Một trận **5 lượt**, có bảng tỷ số từng lượt, hiệu ứng **"GOAL!"** khi ghi bàn
+  và lưu kỷ lục số bàn cao nhất.
+
+Luật cản bóng: cản chắc chắn nếu thủ môn đổ **đúng ô**; nếu **đúng cột nhưng sai
+tầm cao/thấp** thì cản với xác suất `SAVE_ON_SAME_COLUMN = 0.35`. Chỉ cản khi
+trùng đúng ô thì tỉ lệ cản là 1/6 — sút gần như luôn vào và mất hết hồi hộp; với
+con số này tỉ lệ cản khoảng 22%.
+
+> Spec cho phép "vuốt **hoặc** bấm chọn góc sút". Tôi chọn **chạm** vì rõ ràng
+> hơn với học sinh 8 tuổi và không cần `PanResponder`. Chưa hỗ trợ vuốt.
 
 ### Quản lý thời gian khi đang chơi
 

@@ -148,7 +148,7 @@ export interface WeekTopic {
 }
 
 /** Các trò chơi tích hợp trong Góc Game */
-export type GameId = 'mario-mini' | 'color-sort';
+export type GameId = 'mario-mini' | 'color-sort' | 'penalty';
 
 /** Thông tin hiển thị của một trò chơi trên lưới Góc Game */
 export interface GameInfo {

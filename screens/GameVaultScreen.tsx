@@ -36,6 +36,7 @@ import type { GameId, RootTabParamList, SyncState } from '../types';
 import { GAMES } from './games/catalog';
 import ColorSortGame from './games/ColorSortGame';
 import MarioMiniGame from './games/MarioMiniGame';
+import PenaltyGame from './games/PenaltyGame';
 
 export default function GameVaultScreen() {
   const navigation = useNavigation<BottomTabNavigationProp<RootTabParamList>>();
@@ -222,6 +223,7 @@ export default function GameVaultScreen() {
       >
         {activeGame === 'mario-mini' && <MarioMiniGame onExit={closeGame} />}
         {activeGame === 'color-sort' && <ColorSortGame onExit={closeGame} />}
+        {activeGame === 'penalty' && <PenaltyGame onExit={closeGame} />}
       </Modal>
     </KeyboardAvoidingView>
   );
