@@ -30,12 +30,13 @@ import { BRAND_FOOTER } from '../constants/brand';
 import { useAuth } from '../context/AuthContext';
 import { usePlaytime } from '../context/PlaytimeContext';
 import { checkAppUpdate, type UpdateInfo } from '../lib/updateChecker';
+import { isOtaSupported } from '../lib/otaUpdates';
 import {
-  checkOta,
-  downloadAndApplyOta,
-  isOtaSupported,
+  checkForInAppUpdate,
+  downloadAndApplyUpdate,
+  isDemoUpdate,
   runningUpdateLabel,
-} from '../lib/otaUpdates';
+} from '../services/updateService';
 import PinGate from './PinGate';
 import UpdateModal from './UpdateModal';
 
@@ -291,8 +292,8 @@ function UpdateSection() {
     setOtaBusy(true);
     setMessage(null);
 
-    const found = await checkOta();
-    if (found.status === 'unsupported') {
+    const found = await checkForInAppUpdate();
+    if (found.outcome === 'unavailable') {
       setOtaBusy(false);
       setMessage({
         type: 'error',
@@ -300,12 +301,12 @@ function UpdateSection() {
       });
       return;
     }
-    if (found.status === 'up-to-date') {
+    if (found.outcome === 'up-to-date') {
       setOtaBusy(false);
       setMessage({ type: 'ok', text: 'Bạn đang dùng bản mới nhất!' });
       return;
     }
-    if (found.status === 'error') {
+    if (found.outcome === 'error') {
       setOtaBusy(false);
       setMessage({
         type: 'error',
@@ -315,9 +316,9 @@ function UpdateSection() {
     }
 
     // Có bản mới: tải rồi mở lại app luôn. Thành công thì code dưới không chạy tới.
-    const applied = await downloadAndApplyOta();
+    const applied = await downloadAndApplyUpdate();
     setOtaBusy(false);
-    if (applied.status === 'error') {
+    if (!applied.ok) {
       setMessage({ type: 'error', text: applied.error ?? 'Cập nhật thất bại.' });
     }
   }, []);
@@ -373,10 +374,12 @@ function UpdateSection() {
         <Text style={styles.versionValue}>v{APP_VERSION}</Text>
       </View>
 
-      {isOtaSupported() && (
+      {(isOtaSupported() || isDemoUpdate()) && (
         <View style={styles.versionRow}>
           <Text style={styles.versionLabel}>Bản đang chạy</Text>
-          <Text style={styles.versionValue}>{runningUpdateLabel()}</Text>
+          <Text style={styles.versionValue}>
+            {isDemoUpdate() ? 'Bản thử (chế độ phát triển)' : runningUpdateLabel()}
+          </Text>
         </View>
       )}
 

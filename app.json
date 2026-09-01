@@ -2,7 +2,7 @@
   "expo": {
     "name": "Min Education Gamification",
     "slug": "lop3-study-game",
-    "version": "1.0.3",
+    "version": "1.0.4",
     "orientation": "default",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "light",
@@ -30,6 +30,7 @@
       "expo-font"
     ],
     "updates": {
+      "enabled": true,
       "url": "https://min-silk-iota.vercel.app/api/manifest",
       "checkAutomatically": "ON_LOAD",
       "fallbackToCacheTimeout": 0

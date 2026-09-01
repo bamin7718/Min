@@ -23,7 +23,8 @@ import { BRAND_SHORT, BRAND_TAGLINE } from './constants/brand';
 import { colors, elevation, radius, spacing, touch } from './constants/theme';
 import { APP_VERSION } from './constants/version';
 import { checkAppUpdate, type UpdateInfo } from './lib/updateChecker';
-import { checkOta, downloadAndApplyOta } from './lib/otaUpdates';
+import { checkForInAppUpdate } from './services/updateService';
+import OtaUpdateModal from './screens/OtaUpdateModal';
 import { AuthProvider, useAuth } from './context/AuthContext';
 import { PlaytimeProvider, usePlaytime } from './context/PlaytimeContext';
 import AuthScreen from './screens/AuthScreen';
@@ -145,9 +146,10 @@ function RootRouter({ assetsReady }: { assetsReady: boolean }) {
       }
     });
 
-    // Cập nhật ngầm: nhẹ hơn nhiều nên chỉ hiện một dải thông báo, không chặn app
-    checkOta().then((result) => {
-      if (!cancelled && result.status === 'available') setOtaReady(true);
+    // Cập nhật trong app: kiểm ngay sau khi đăng nhập thành công
+    checkForInAppUpdate().then((result) => {
+      if (cancelled) return;
+      if (result.outcome === 'available' || result.outcome === 'demo') setOtaReady(true);
     });
 
     return () => {
@@ -177,98 +179,49 @@ function RootRouter({ assetsReady }: { assetsReady: boolean }) {
 
   return (
     <>
-      <MainTabs
-        otaBanner={
-          otaReady && !otaDismissed ? (
-            <OtaBanner onDismiss={() => setOtaDismissed(true)} />
-          ) : null
-        }
-      />
+      <MainTabs />
 
-      {/* Cập nhật không bắt buộc: hiện một lần, cho phép để sau */}
-      <Modal
-        visible={update !== null && !dismissed}
-        animationType="slide"
-        presentationStyle="fullScreen"
-        onRequestClose={() => setDismissed(true)}
-      >
-        {update && (
+      {/*
+        Cập nhật trong app: hộp thoại hiện ngay sau khi đăng nhập, cho phép để
+        sau. Chỉ tải phần JavaScript nên không cần cài lại APK.
+      */}
+      {/*
+        Render CÓ ĐIỀU KIỆN thay vì chỉ đặt visible={false}: Modal của React
+        Native Web không tháo nội dung ra khi visible chuyển thành false (hiệu
+        ứng đóng không bao giờ kết thúc), nên bấm "Để sau" mà hộp thoại vẫn còn
+        nguyên trên màn hình.
+      */}
+      {otaReady && !otaDismissed && (
+        <Modal
+          visible
+          animationType="fade"
+          transparent
+          onRequestClose={() => setOtaDismissed(true)}
+        >
+          <OtaUpdateModal onDismiss={() => setOtaDismissed(true)} />
+        </Modal>
+      )}
+
+      {/* Cập nhật phải tải lại APK: hiện một lần, cho phép để sau */}
+      {update !== null && !dismissed && (
+        <Modal
+          visible
+          animationType="slide"
+          presentationStyle="fullScreen"
+          onRequestClose={() => setDismissed(true)}
+        >
           <UpdateModal
             info={update}
             currentVersion={APP_VERSION}
             onDismiss={() => setDismissed(true)}
           />
-        )}
-      </Modal>
+        </Modal>
+      )}
     </>
   );
 }
 
-/**
- * Dải thông báo cập nhật ngầm.
- *
- * Cố ý KHÔNG dùng modal chặn màn hình như bản cập nhật APK: bản này chỉ tải mấy
- * megabyte JavaScript rồi mở lại app, không có gì phải hỏi long trọng. Học sinh
- * đang làm dở bài thì bấm "Để sau" là xong.
- */
-function OtaBanner({ onDismiss }: { onDismiss: () => void }) {
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-
-  const apply = useCallback(async () => {
-    setBusy(true);
-    setError(null);
-    const result = await downloadAndApplyOta();
-    // Thành công thì app tự khởi động lại, code phía dưới không chạy tới
-    if (result.status === 'error') {
-      setError(result.error ?? 'Cập nhật thất bại, thử lại sau nhé!');
-      setBusy(false);
-    } else if (result.status !== 'downloaded') {
-      onDismiss();
-    }
-  }, [onDismiss]);
-
-  return (
-    <View style={styles.otaBanner}>
-      <Text style={styles.otaEmoji}>⚡</Text>
-      <View style={styles.otaTextGroup}>
-        <Text style={styles.otaTitle}>
-          {busy ? 'Đang tải bản cập nhật...' : 'Có bản cập nhật nhanh!'}
-        </Text>
-        <Text style={styles.otaText}>
-          {error ??
-            (busy
-              ? 'Xong là app tự mở lại, em đợi một chút nhé.'
-              : 'Chỉ tải phần mới, không phải cài lại app.')}
-        </Text>
-      </View>
-
-      {!busy && (
-        <>
-          <Pressable
-            onPress={() => void apply()}
-            accessibilityRole="button"
-            accessibilityLabel="Cập nhật ngay"
-            style={({ pressed }) => [styles.otaButton, pressed && styles.pressed]}
-          >
-            <Text style={styles.otaButtonText}>Cập nhật</Text>
-          </Pressable>
-          <Pressable
-            onPress={onDismiss}
-            accessibilityRole="button"
-            accessibilityLabel="Để sau"
-            style={({ pressed }) => [styles.otaLater, pressed && styles.pressed]}
-          >
-            <Text style={styles.otaLaterText}>Để sau</Text>
-          </Pressable>
-        </>
-      )}
-      {busy && <ActivityIndicator color={colors.textOnPrimary} />}
-    </View>
-  );
-}
-
-function MainTabs({ otaBanner }: { otaBanner?: React.ReactNode }) {
+function MainTabs() {
   const { availableMinutes } = usePlaytime();
   const [showSettings, setShowSettings] = useState(false);
 
@@ -277,7 +230,6 @@ function MainTabs({ otaBanner }: { otaBanner?: React.ReactNode }) {
   return (
     <View style={styles.root}>
       <AccountBar onOpenSettings={() => setShowSettings(true)} />
-      {otaBanner}
 
       <NavigationContainer>
         <Tab.Navigator
@@ -510,30 +462,6 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     backgroundColor: 'rgba(255,255,255,0.22)',
   },
-
-  /** Dải thông báo cập nhật ngầm, nằm ngay dưới thanh header */
-  otaBanner: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: spacing.sm,
-    backgroundColor: colors.primaryDark,
-    paddingHorizontal: spacing.md,
-    paddingVertical: spacing.sm,
-  },
-  otaEmoji: { fontSize: 20 },
-  otaTextGroup: { flex: 1, minWidth: 0 },
-  otaTitle: { fontSize: 13, fontWeight: '800', color: colors.textOnPrimary },
-  otaText: { fontSize: 11, color: '#C7D2FE' },
-  otaButton: {
-    minHeight: 36,
-    justifyContent: 'center',
-    paddingHorizontal: spacing.md,
-    borderRadius: radius.pill,
-    backgroundColor: colors.reward,
-  },
-  otaButtonText: { fontSize: 12, fontWeight: '800', color: colors.textOnPrimary },
-  otaLater: { minHeight: 36, justifyContent: 'center', paddingHorizontal: spacing.sm },
-  otaLaterText: { fontSize: 11, fontWeight: '700', color: '#C7D2FE' },
 
   /**
    * Thanh điều hướng nổi, nền bán trong suốt kiểu kính mờ.
