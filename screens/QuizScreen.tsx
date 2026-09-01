@@ -79,6 +79,7 @@ export default function QuizScreen() {
     highestCompletedWeek,
     submitAnswer,
     completeWeek,
+    hydrated,
   } = usePlaytime();
 
   const [selectedSubject, setSelectedSubject] = useState<Subject | null>(null);
@@ -218,6 +219,7 @@ export default function QuizScreen() {
       <HeaderBar
         totalPoints={totalPoints}
         availableMinutes={availableMinutes}
+        hydrated={hydrated}
         topInset={insets.top}
       />
 
@@ -316,10 +318,13 @@ export default function QuizScreen() {
 function HeaderBar({
   totalPoints,
   availableMinutes,
+  hydrated,
   topInset,
 }: {
   totalPoints: number;
   availableMinutes: number;
+  /** Chưa nạp xong Local thì hiện "…" thay vì số 0 để không nháy sai số */
+  hydrated: boolean;
   topInset: number;
 }) {
   return (
@@ -332,12 +337,12 @@ function HeaderBar({
       <View style={styles.statRow}>
         <View style={styles.statChip}>
           <Text style={styles.statEmoji}>⭐</Text>
-          <Text style={styles.statValue}>{totalPoints}</Text>
+          <Text style={styles.statValue}>{hydrated ? totalPoints : '…'}</Text>
           <Text style={styles.statLabel}>điểm</Text>
         </View>
         <View style={styles.statChip}>
           <Text style={styles.statEmoji}>🎮</Text>
-          <Text style={styles.statValue}>{availableMinutes}</Text>
+          <Text style={styles.statValue}>{hydrated ? availableMinutes : '…'}</Text>
           <Text style={styles.statLabel}>phút</Text>
         </View>
       </View>
@@ -385,7 +390,7 @@ function SubjectPicker({
   );
 }
 
-function SubjectCard({
+const SubjectCard = React.memo(function SubjectCard({
   subject,
   isTablet,
   masteredQuestionIds,
@@ -447,7 +452,7 @@ function SubjectCard({
       <Ionicons name="chevron-forward" size={24} color={subject.color} />
     </Pressable>
   );
-}
+});
 
 /* ------------------------------------------------------------------ */
 /* Màn hình chọn tuần (môn Toán)                                       */
@@ -462,7 +467,7 @@ const WEEK_STATUS_META: Record<
   locked: { label: 'Khoá', icon: 'lock-closed', color: colors.textMuted },
 };
 
-function WeekPicker({
+const WeekPicker = React.memo(function WeekPicker({
   isTablet,
   highestCompletedWeek,
   onChooseWeek,
@@ -519,7 +524,7 @@ function WeekPicker({
                 week={week}
                 status={weekStatus(week.weekNumber, highestCompletedWeek)}
                 isTablet={isTablet}
-                onPress={() => onChooseWeek(week.weekNumber)}
+                onSelect={onChooseWeek}
               />
             ))}
           </View>
@@ -527,25 +532,27 @@ function WeekPicker({
       ))}
     </View>
   );
-}
+});
 
-function WeekCard({
+const WeekCard = React.memo(function WeekCard({
   week,
   status,
   isTablet,
-  onPress,
+  onSelect,
 }: {
   week: WeekTopic;
   status: WeekStatus;
   isTablet: boolean;
-  onPress: () => void;
+  /** Nhận số tuần thay vì closure, để prop không đổi giữa các lần render */
+  onSelect: (weekNumber: number) => void;
 }) {
   const meta = WEEK_STATUS_META[status];
   const isLocked = status === 'locked';
+  const handlePress = useCallback(() => onSelect(week.weekNumber), [onSelect, week.weekNumber]);
 
   return (
     <Pressable
-      onPress={onPress}
+      onPress={handlePress}
       disabled={isLocked}
       accessibilityRole="button"
       accessibilityState={{ disabled: isLocked }}
@@ -576,7 +583,7 @@ function WeekCard({
       </Text>
     </Pressable>
   );
-}
+});
 
 /* ------------------------------------------------------------------ */
 /* Thanh tiến độ bài test                                              */
@@ -631,7 +638,7 @@ function QuizProgress({
 /* Nút lựa chọn đáp án                                                 */
 /* ------------------------------------------------------------------ */
 
-function OptionButton({
+const OptionButton = React.memo(function OptionButton({
   label,
   text,
   isTablet,
@@ -693,7 +700,7 @@ function OptionButton({
       {showAsWrong && <Ionicons name="close-circle" size={26} color={colors.danger} />}
     </Pressable>
   );
-}
+});
 
 /* ------------------------------------------------------------------ */
 /* Khung phản hồi đúng / sai                                           */

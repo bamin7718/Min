@@ -19,7 +19,6 @@ import {
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
-import AuthScreen from './AuthScreen';
 
 import {
   MAX_ACCUMULATED_MINUTES,
@@ -52,6 +51,8 @@ export default function GameVaultScreen() {
     isLocked,
     startPlaying,
     pausePlaying,
+    hydrated,
+    isOnline,
   } = usePlaytime();
 
   // Hiệu ứng "thở" của đồng hồ khi đang chạy
@@ -140,7 +141,7 @@ export default function GameVaultScreen() {
           </View>
           <View style={styles.pointChip}>
             <Text style={styles.pointChipEmoji}>⭐</Text>
-            <Text style={styles.pointChipText}>{totalPoints}</Text>
+            <Text style={styles.pointChipText}>{hydrated ? totalPoints : '…'}</Text>
           </View>
         </View>
 
@@ -155,7 +156,7 @@ export default function GameVaultScreen() {
         >
           <Text style={styles.clockLabel}>Thời gian chơi game khả dụng</Text>
           <Text style={[styles.clockValue, isTablet && styles.clockValueTablet]}>
-            {formatClock(availableSeconds)}
+            {hydrated ? formatClock(availableSeconds) : '--:--'}
           </Text>
           <Text style={styles.clockHint}>
             {isLocked
@@ -167,7 +168,7 @@ export default function GameVaultScreen() {
         </Animated.View>
 
         {/* ----- Hết giờ: khoá lại. Còn giờ: hiện lưới trò chơi ----- */}
-        {isLocked ? (
+        {!hydrated ? null : isLocked ? (
           <LockedPanel onGoToQuiz={goToQuiz} />
         ) : (
           <>
@@ -194,10 +195,15 @@ export default function GameVaultScreen() {
             </Pressable>
 
             <View style={styles.noteCard}>
-              <Ionicons name="information-circle" size={20} color={colors.primary} />
+              <Ionicons
+                name={isOnline ? 'information-circle' : 'cloud-offline-outline'}
+                size={20}
+                color={isOnline ? colors.primary : colors.warning}
+              />
               <Text style={styles.noteText}>
-                Đồng hồ chỉ chạy khi em đang chơi, và tự tạm dừng khi em thoát ứng
-                dụng — nên em không bị mất giờ chơi oan nhé!
+                {isOnline
+                  ? 'Đồng hồ chỉ chạy khi em đang chơi, và tự tạm dừng khi em thoát ứng dụng — nên em không bị mất giờ chơi oan nhé!'
+                  : 'Đang mất mạng nhưng em vẫn học và chơi bình thường nhé — mọi thứ được lưu ngay trên máy và sẽ tự đồng bộ khi có mạng.'}
               </Text>
             </View>
           </>
@@ -225,7 +231,11 @@ export default function GameVaultScreen() {
 /* Lưới trò chơi (2 cột)                                               */
 /* ------------------------------------------------------------------ */
 
-function GameGrid({ onOpenGame }: { onOpenGame: (gameId: GameId) => void }) {
+const GameGrid = React.memo(function GameGrid({
+  onOpenGame,
+}: {
+  onOpenGame: (gameId: GameId) => void;
+}) {
   return (
     <View>
       <Text style={styles.sectionTitle}>Chọn trò chơi</Text>
@@ -260,7 +270,7 @@ function GameGrid({ onOpenGame }: { onOpenGame: (gameId: GameId) => void }) {
       </View>
     </View>
   );
-}
+});
 
 /* ------------------------------------------------------------------ */
 /* Bảng thông báo khi hết giờ                                          */
@@ -292,11 +302,10 @@ function LockedPanel({ onGoToQuiz }: { onGoToQuiz: () => void }) {
 /* ------------------------------------------------------------------ */
 
 function ParentPanel() {
-  const { grantMinutesByParent, resetProgress, verifyParentPin, syncState } =
+  const { grantMinutesByParent, resetProgress, syncState, pendingChanges } =
     usePlaytime();
 
   const [isOpen, setIsOpen] = useState(false);
-  const [showAuth, setShowAuth] = useState(false);
   const [pin, setPin] = useState('');
   const [minutes, setMinutes] = useState<string>(String(PARENT_GRANT_OPTIONS[1]));
   const [message, setMessage] = useState<{
@@ -357,21 +366,6 @@ function ParentPanel() {
     setMessage({ type: 'success', text: 'Đã đặt lại điểm và thời gian chơi game.' });
   }, [pin, playShake, resetProgress]);
 
-  // Màn hình tài khoản cũng nằm sau mã PIN để học sinh không tự đăng xuất.
-  const handleOpenAccount = useCallback(() => {
-    Keyboard.dismiss();
-    if (!verifyParentPin(pin)) {
-      playShake();
-      setMessage({
-        type: 'error',
-        text: 'Nhập đúng mã PIN để mở phần Tài khoản & đồng bộ.',
-      });
-      return;
-    }
-    setPin('');
-    setMessage(null);
-    setShowAuth(true);
-  }, [pin, playShake, verifyParentPin]);
 
   return (
     <View style={styles.parentCard}>
@@ -467,15 +461,14 @@ function ParentPanel() {
             <Text style={styles.grantButtonText}>Cấp thêm giờ / Mở khoá</Text>
           </Pressable>
 
-          <Pressable
-            onPress={handleOpenAccount}
-            accessibilityRole="button"
-            style={({ pressed }) => [styles.accountButton, pressed && styles.pressed]}
-          >
+          <View style={styles.accountButton}>
             <Ionicons name="cloud-outline" size={20} color={colors.primary} />
-            <Text style={styles.accountButtonText}>Tài khoản & đồng bộ</Text>
+            <Text style={styles.accountButtonText}>
+              {SYNC_TEXT[syncState]}
+              {pendingChanges > 0 ? ` (${pendingChanges} chờ)` : ''}
+            </Text>
             <SyncDot state={syncState} />
-          </Pressable>
+          </View>
 
           <Pressable
             onPress={handleReset}
@@ -493,17 +486,20 @@ function ParentPanel() {
         </Animated.View>
       )}
 
-      <Modal
-        visible={showAuth}
-        animationType="slide"
-        onRequestClose={() => setShowAuth(false)}
-        presentationStyle="fullScreen"
-      >
-        <AuthScreen onClose={() => setShowAuth(false)} />
-      </Modal>
     </View>
   );
 }
+
+/** Nhãn trạng thái đồng bộ hiển thị cho phụ huynh */
+const SYNC_TEXT: Record<SyncState, string> = {
+  disabled: 'Chưa cấu hình máy chủ — chỉ lưu trên máy',
+  signedOut: 'Chưa đăng nhập',
+  idle: 'Đã lưu trên máy',
+  offline: 'Đang offline — sẽ tự đồng bộ khi có mạng',
+  syncing: 'Đang đồng bộ...',
+  synced: 'Đã đồng bộ với Turso',
+  error: 'Đồng bộ thất bại — sẽ tự thử lại',
+};
 
 /** Chấm màu thể hiện trạng thái đồng bộ */
 function SyncDot({ state }: { state: SyncState }) {

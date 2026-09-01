@@ -58,9 +58,10 @@ export async function fetchRemoteProgress(
 
   const { data, error } = await supabase
     .from(TABLES.userProgress)
-    .select(
-      'total_points, accumulated_game_minutes, mastered_question_ids, last_updated',
-    )
+    // Phải là một string literal liền: supabase-js suy luận kiểu trả về từ
+    // chính chuỗi này, nối chuỗi sẽ làm mất inference.
+    // prettier-ignore
+    .select('total_points, accumulated_game_minutes, mastered_question_ids, highest_completed_week, last_updated')
     .eq('user_id', userId)
     .maybeSingle();
 
@@ -75,6 +76,7 @@ export async function fetchRemoteProgress(
       masteredQuestionIds: Array.isArray(data.mastered_question_ids)
         ? data.mastered_question_ids
         : [],
+      highestCompletedWeek: data.highest_completed_week ?? 0,
       lastUpdated: data.last_updated ?? new Date().toISOString(),
     },
   };
@@ -93,6 +95,7 @@ export async function pushRemoteProgress(
       total_points: progress.totalPoints,
       accumulated_game_minutes: progress.accumulatedGameMinutes,
       mastered_question_ids: progress.masteredQuestionIds,
+      highest_completed_week: progress.highestCompletedWeek,
       last_updated: progress.lastUpdated,
     },
     { onConflict: 'user_id' },

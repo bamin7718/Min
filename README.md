@@ -45,7 +45,12 @@ Sau đó:
 | `constants/mathCurriculum.ts` | Lộ trình Toán 35 tuần + 126 câu hỏi Toán + hàm tra tuần/trạng thái |
 | `constants/mockData.ts` | 40 câu Tiếng Việt + Tiếng Anh, hàm rút đề, hàm trộn lựa chọn, các hằng số cấu hình |
 | `constants/theme.ts` | Bảng màu, khoảng cách, ngưỡng tablet |
-| `lib/supabase.ts` | Supabase Client tuỳ chọn để đồng bộ tiến độ |
+| `lib/supabase.ts` | Supabase Client — dùng cho Auth, và đồng bộ nếu không bật Turso |
+| `lib/turso.ts` | Tầng dữ liệu Turso (libSQL) — chỉ chạy phía server |
+| `lib/progressApi.ts` | Client gọi `api/progress`, app chỉ dùng `fetch` |
+| `lib/deviceId.ts` | Id thiết bị 128-bit dùng khi chưa đăng nhập |
+| `api/progress.ts` | Vercel Edge function giữ token Turso, GET/PUT tiến độ |
+| `db/schema.sql` | Schema Turso |
 
 ## Môn Toán — lộ trình 35 tuần
 
@@ -245,6 +250,314 @@ create policy "own progress" on public.user_progress
 create policy "own results" on public.quiz_results
   for all using (auth.uid() = user_id) with check (auth.uid() = user_id);
 ```
+
+## Kiến trúc Offline-First
+
+Ứng dụng coi **Local là nguồn dữ liệu chính**. Mọi thao tác của học sinh ghi xuống
+AsyncStorage trước; việc đẩy lên server là chuyện chạy ngầm.
+
+```
+Thao tác  ->  state React (tức thì)  ->  AsyncStorage  ->  sync_queue  ->  Turso
+                    UI cập nhật ngay        nguồn chính      ngầm, có retry
+```
+
+| File | Vai trò |
+| --- | --- |
+| `lib/storage.ts` | Đọc/ghi tiến độ theo `userId`, quản lý `sync_queue`, hàm `resolveConflict` |
+| `lib/syncEngine.ts` | Lắng nghe NetInfo, đẩy hàng đợi, tự thử lại với backoff |
+
+### Hàng đợi gộp theo tài khoản
+
+Tiến độ là **ảnh chụp toàn phần**, không phải delta — nên chỉ ảnh chụp mới nhất của
+mỗi tài khoản là có ý nghĩa. `enqueueProgress` **thay thế** mục cũ cùng `userId` thay
+vì nối thêm. Hệ quả: offline cả ngày thì hàng đợi vẫn chỉ có 1 mục, và không có nguy
+cơ một ảnh chụp cũ ghi đè lên ảnh chụp mới.
+
+### Giải quyết xung đột
+
+`resolveConflict(localLastUpdated, remoteLastUpdated)` — **timestamp mới nhất thắng**.
+`localLastUpdated === null` (máy mới cài) thì luôn lấy dữ liệu server. So sánh bằng
+`Date.parse` chứ không so chuỗi, vì server trả `+00:00` còn `Date` trả `Z`.
+
+### Thử lại khi lỗi
+
+Backoff 5s → 10s → 20s → … tối đa 5 phút. Mất mạng giữa chừng thì mục vẫn nằm trong
+hàng đợi, không mất dữ liệu. Trạng thái `offline` luôn thắng khi đặt status, để một
+lượt `flush()` đang dở không báo nhầm "đã đồng bộ" sau khi thiết bị đã rớt mạng.
+
+### Tối ưu render
+
+`WeekCard`, `WeekPicker`, `OptionButton`, `SubjectCard`, `GameGrid` đều bọc
+`React.memo`. Quan trọng nhất là `WeekCard`: khi đồng hồ chơi game chạy, context đổi
+mỗi giây, không memo thì **cả 35 thẻ tuần re-render mỗi giây**. `WeekCard` nhận
+`onSelect(weekNumber)` thay vì closure `() => onChooseWeek(n)` để prop không đổi giữa
+các lần render — nếu vẫn dùng closure thì `React.memo` sẽ vô tác dụng.
+
+### Preload asset
+
+`App.tsx` nạp trước font icon Ionicons và ảnh trong `assets/`, nhưng **có hạn 2 giây**
+và bắt mọi lỗi. Lý do: trên web `Asset.loadAsync`/`Font.loadAsync` đi qua mạng, mất
+mạng là chúng không bao giờ kết thúc — chặn UI chờ nó thì app đứng ở màn splash vĩnh
+viễn. Hết 2 giây là vào app, icon nạp sau cũng được.
+
+> Phần gamification hiện dùng emoji và `View` thuần, chưa có ảnh hay âm thanh khen
+> thưởng, nên preload ở đây thực chất chỉ có tác dụng với font icon.
+
+### Không chặn UI khi khởi động
+
+Không còn màn chờ "đang tải tiến độ". Các màn hình hiện `…` / `--:--` ở chỗ số liệu
+khi chưa đọc xong Local, tránh vừa không chặn UI vừa không nháy số 0 sai.
+
+## Đăng nhập & phân quyền dữ liệu (Turso)
+
+Database: `libsql://min-bamin7718.aws-ap-northeast-1.turso.io`
+
+### Kiến trúc — và vì sao không nối trực tiếp từ app
+
+```
+App (chỉ fetch + session token)  ->  /api/auth, /api/progress  ->  Turso
+```
+
+Nối trực tiếp bằng `EXPO_PUBLIC_TURSO_AUTH_TOKEN` sẽ **vô hiệu hoá toàn bộ tính năng
+đăng nhập**, vì:
+
+- Token nằm trong bundle công khai, nên bảng `users` (kèm `password_hash`) ai cũng
+  đọc được. libSQL không có Row Level Security để chặn.
+- `WHERE user_id = ?` chạy ở client thì chính client chọn điều kiện — chỉ cần
+  `SELECT * FROM user_progress` là lấy hết dữ liệu mọi học sinh.
+
+Nên điểm thực thi phân quyền đặt ở server: **`user_id` lấy TỪ session token đã ký
+HMAC**, không phải từ tham số client gửi lên. Client có sửa query string hay body thế
+nào cũng chỉ đọc/ghi được dòng của mình.
+
+### Bảng
+
+| Bảng | Cột |
+| --- | --- |
+| `users` | `id`, `username` (UNIQUE), `password_hash`, `role` (`student`/`parent`), `pin_code`, `created_at` |
+| `user_progress` | `id`, `user_id` (FK), `subject`, `completed_week`, `total_points`, `accumulated_game_minutes`, `mastered_question_ids`, `updated_at`, UNIQUE(`user_id`,`subject`) |
+| `quiz_results` | lịch sử bài làm (chưa dùng) |
+
+Hai điểm lệch so với spec, đều có lý do:
+
+- Thêm `mastered_question_ids`: thiếu nó thì quy tắc "câu đã trả lời đúng không cộng
+  phút nữa" mất hiệu lực mỗi khi đổi thiết bị.
+- `subject` hiện luôn là `'chung'` (một dòng cho mỗi học sinh), vì điểm và phút chơi
+  game trong app là giá trị tổng chứ không tách theo môn. Giữ cột lại để sau tách
+  được mà không phải đổi schema.
+
+### Mật khẩu và PIN
+
+Băm bằng **PBKDF2-SHA256, 100 000 vòng, salt 16 byte ngẫu nhiên** qua WebCrypto
+(`lib/authCrypto.ts`), lưu dạng `pbkdf2$<vòng>$<salt>$<hash>`. PIN phụ huynh cũng
+băm, không lưu thô. So sánh hash theo thời gian hằng số.
+
+Cố tình **không băm ở client**: nếu client băm thì chính cái hash trở thành mật khẩu.
+
+### Session
+
+`api/auth` trả về token `<payload>.<HMAC-SHA256>` hạn 30 ngày, ký bằng `AUTH_SECRET`.
+App lưu vào AsyncStorage (`lib/session.ts`) nên mở lại app là vẫn đăng nhập.
+
+### Cách ly dữ liệu khi đổi tài khoản
+
+Dữ liệu cục bộ lưu theo khoá riêng từng tài khoản
+(`@lop3-study-game/progress-v2/<userId>`). Khi `userId` đổi, `PlaytimeContext` **xoá
+sạch state trước** rồi mới nạp tài khoản mới, nên không có khoảnh khắc nào hiện điểm
+hay giờ chơi của người trước.
+
+### Bật lên
+
+**1. Tạo bảng** (đã làm rồi cho `min-bamin7718`):
+```bash
+turso db shell min-bamin7718 < db/schema.sql
+```
+
+**2. Vercel → Settings → Environment Variables:**
+
+| Biến | Giá trị |
+| --- | --- |
+| `TURSO_DATABASE_URL` | `libsql://min-bamin7718.aws-ap-northeast-1.turso.io` |
+| `TURSO_AUTH_TOKEN` | `turso db tokens create min-bamin7718` |
+| `AUTH_SECRET` | chuỗi ngẫu nhiên >= 16 ký tự (`openssl rand -hex 32`) |
+
+**3. `.env` của app:** `EXPO_PUBLIC_PROGRESS_API_URL=https://min-hocchoi.vercel.app`
+
+**4. Redeploy.**
+
+### API
+
+| Endpoint | Tác dụng |
+| --- | --- |
+| `POST /api/auth?action=register` | `{username, password, role, pin?}` → session |
+| `POST /api/auth?action=login` | `{username, password}` → session |
+| `GET /api/progress` | Đọc tiến độ (Bearer token) |
+| `PUT /api/progress` | Ghi tiến độ (Bearer token) |
+
+Server không tin client: tên đăng nhập phải khớp `^[a-zA-Z0-9_.-]{3,24}$`, mật khẩu
+>= 6 ký tự, PIN đúng 4 số, số âm về 0, `completed_week` kẹp ở 35, danh sách id cắt ở
+2000. Đăng nhập sai và tài khoản không tồn tại trả **cùng một thông báo** để không
+tiết lộ tên nào đang dùng.
+
+## Build APK Android bằng GitHub Actions
+
+Workflow `.github/workflows/android-apk.yml` tự chạy mỗi lần push lên `main`, hoặc
+bấm tay ở tab **Actions → Build APK Android → Run workflow**.
+
+Lấy file APK: vào **Actions** → chọn lần chạy → mục **Artifacts** → tải
+`lop3-study-game-apk`. Giải nén rồi copy file `.apk` sang điện thoại/tablet, mở lên
+và cho phép *Cài đặt từ nguồn không xác định*.
+
+Quy trình trong CI: `npm ci` → `tsc --noEmit` → `expo prebuild --platform android`
+→ `gradlew assembleRelease` → kiểm tra chữ ký bằng `apksigner` → upload artifact.
+Thư mục `android/` **không** commit vào repo, mỗi lần build đều dựng lại từ
+`app.json` nên không bị lệch cấu hình. Chỉ build cho `arm64-v8a` và `armeabi-v7a`
+(máy thật) để nhẹ và nhanh hơn.
+
+### Chữ ký của APK — đọc trước khi phát hành
+
+Expo cấu hình sẵn buildType `release` ký bằng **`debug.keystore` đi kèm template**,
+nên APK ra là đã ký và cài được ngay mà không cần thêm secret nào. Nhưng:
+
+- **Dùng riêng trong nhà thì ổn** — cài lên máy của con hoặc gửi cho người thân.
+- **KHÔNG dùng để phát hành lên Google Play.** Play yêu cầu keystore riêng do bạn
+  giữ. Keystore debug là công khai, ai cũng có thể ký một APK giả mạo cùng package
+  `com.bamin7718.lop3studygame`.
+
+Muốn keystore riêng: tạo bằng
+`keytool -genkeypair -v -keystore my.keystore -alias upload -keyalg RSA -keysize 2048 -validity 10000`,
+rồi sửa `signingConfigs.release` trong `android/app/build.gradle` do prebuild sinh ra
+(cách gọn nhất là viết một Expo config plugin để tự áp dụng sau mỗi lần prebuild).
+
+### Cách khác: EAS Build
+
+`eas-cli` đã được cài trên máy dev. EAS quản lý keystore giúp bạn nên phù hợp hơn nếu
+định lên Play Store — đổi lại cần tài khoản Expo:
+
+```bash
+eas login && eas init && eas build -p android --profile preview
+```
+
+## Lưu ý về mức độ "khoá" thật
+
+Việc khoá ở đây là khoá **trong ứng dụng**: hết giờ thì màn hình Góc Game hiển thị
+lớp khoá và không cho bấm chơi. Đồng hồ tự tạm dừng khi app rời nền (`AppState`).
+Ứng dụng Expo không thể khoá các app game khác trên máy — muốn cưỡng chế ở cấp hệ
+điều hành thì cần native module (Android `UsageStatsManager` / Device Admin) và
+phải build development build thay vì Expo Go.
+
+## Kết nối Supabase (tuỳ chọn)
+
+Ứng dụng chạy **offline hoàn toàn** bằng AsyncStorage. Supabase chỉ để đồng bộ tiến
+độ giữa nhiều thiết bị.
+
+1. Sao chép `.env.example` → `.env`, điền `EXPO_PUBLIC_SUPABASE_URL` và
+   `EXPO_PUBLIC_SUPABASE_ANON_KEY`.
+2. Khởi động lại Metro để nạp biến môi trường: `npx expo start -c`.
+
+SQL khởi tạo bảng:
+
+```sql
+create table if not exists public.user_progress (
+  user_id uuid primary key references auth.users (id) on delete cascade,
+  total_points integer not null default 0,
+  accumulated_game_minutes integer not null default 0,
+  mastered_question_ids jsonb not null default '[]'::jsonb,
+  last_updated timestamptz not null default now()
+);
+
+create table if not exists public.quiz_results (
+  id text primary key,
+  user_id uuid not null references auth.users (id) on delete cascade,
+  subject text not null,
+  total_questions integer not null,
+  correct_count integer not null,
+  points_earned integer not null,
+  minutes_earned integer not null,
+  answers jsonb not null default '[]'::jsonb,
+  completed_at timestamptz not null default now()
+);
+
+alter table public.user_progress enable row level security;
+alter table public.quiz_results enable row level security;
+
+create policy "own progress" on public.user_progress
+  for all using (auth.uid() = user_id) with check (auth.uid() = user_id);
+
+create policy "own results" on public.quiz_results
+  for all using (auth.uid() = user_id) with check (auth.uid() = user_id);
+```
+
+## Đồng bộ qua Turso (libSQL)
+
+Database: `libsql://min-bamin7718.aws-ap-northeast-1.turso.io`
+
+### Vì sao phải có serverless function ở giữa
+
+Token Turso cấp **toàn quyền đọc/ghi/xoá** cả database và libSQL **không có Row
+Level Security**. Khác với Supabase anon key (được thiết kế để công khai, có RLS
+chặn), nếu nhúng token Turso qua `EXPO_PUBLIC_*` thì nó nằm trong bundle công khai —
+bản web tại `min-hocchoi.vercel.app` ai mở DevTools cũng đọc được token rồi xoá sạch
+dữ liệu.
+
+Nên luồng là:
+
+```
+App (chỉ fetch)  ->  /api/progress (Edge, giữ token)  ->  Turso
+```
+
+App **không** import `lib/turso.ts`, nhờ vậy `@libsql/client` không vào bundle app.
+
+### Cách bật
+
+**1. Tạo bảng:**
+```bash
+turso db shell min-bamin7718 < db/schema.sql
+```
+
+**2. Tạo token và đặt vào Vercel** (Project → Settings → Environment Variables).
+Hai biến này **không** có tiền tố `EXPO_PUBLIC_` nên chỉ server đọc được:
+
+| Biến | Giá trị |
+| --- | --- |
+| `TURSO_DATABASE_URL` | `libsql://min-bamin7718.aws-ap-northeast-1.turso.io` |
+| `TURSO_AUTH_TOKEN` | kết quả của `turso db tokens create min-bamin7718` |
+
+**3. Trong `.env` của app** chỉ cần trỏ tới domain đã deploy:
+```
+EXPO_PUBLIC_PROGRESS_API_URL=https://min-hocchoi.vercel.app
+```
+Bản web cùng origin nên để trống cũng chạy.
+
+**4. Redeploy** để Vercel nạp biến môi trường mới.
+
+### Định danh học sinh
+
+| Tình huống | Khoá lưu tiến độ |
+| --- | --- |
+| Đã đăng nhập Supabase | `user.id` — dùng chung được giữa nhiều thiết bị |
+| Chưa đăng nhập | Device id ngẫu nhiên 128-bit trong AsyncStorage — chỉ sao lưu cho máy đó |
+
+Device id phải khó đoán vì Turso không có RLS: chính id là thứ duy nhất ngăn người
+khác đọc tiến độ của máy này. Muốn dùng chung tiến độ giữa web và APK thì **phải
+đăng nhập**.
+
+### API `api/progress`
+
+| Method | Tác dụng |
+| --- | --- |
+| `GET ?userId=...` | Đọc tiến độ, trả `{ progress: null }` nếu chưa có |
+| `PUT ?userId=...` | Ghi tiến độ (upsert) |
+
+Server không tin dữ liệu client: `userId` phải khớp `^[A-Za-z0-9_-]{16,64}$`, số âm
+bị đưa về 0, `highestCompletedWeek` bị kẹp ở 35, danh sách id bị cắt ở 2000 phần tử,
+`lastUpdated` sai định dạng bị thay bằng thời điểm hiện tại.
+
+### Khi chưa cấu hình
+
+App vẫn chạy đầy đủ offline. Màn **Tài khoản & đồng bộ** hiện "Đồng bộ thất bại —
+Không kết nối được tới máy chủ đồng bộ" và mọi tính năng học tập, đổi giờ, chơi game
+vẫn hoạt động bình thường.
 
 ## Đăng nhập & đồng bộ (Supabase Auth)
 

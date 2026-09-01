@@ -1,4 +1,3 @@
-import AsyncStorage from '@react-native-async-storage/async-storage';
 import React, {
   createContext,
   useCallback,
@@ -17,18 +16,24 @@ import {
   REPEAT_ANSWER_GIVES_MINUTES,
 } from '../constants/mockData';
 import { TOTAL_WEEKS, weekBonusMinutes, weekPassThreshold } from './../constants/mathCurriculum';
-import { fetchRemoteProgress, pushRemoteProgress } from '../lib/supabase';
+import { isApiConfigured } from '../lib/authApi';
+import {
+  readLocalProgress,
+  resolveConflict,
+  writeLocalProgress,
+} from '../lib/storage';
+import { syncEngine, type EngineState } from '../lib/syncEngine';
 import type {
   ProgressSyncPayload,
   Question,
   StoredProgress,
   SyncState,
+  SessionUser,
   UserProgress,
   WeekTopic,
 } from '../types';
 import { useAuth } from './AuthContext';
 
-const STORAGE_KEY = '@lop3-study-game/progress-v1';
 const MAX_ACCUMULATED_SECONDS = MAX_ACCUMULATED_MINUTES * 60;
 
 /**
@@ -60,6 +65,8 @@ export interface WeekOutcome {
 }
 
 interface PlaytimeContextValue {
+  /** Tài khoản đang đăng nhập; `null` nghĩa là chưa đăng nhập */
+  currentUser: SessionUser | null;
   /** `false` khi còn đang đọc dữ liệu từ AsyncStorage */
   hydrated: boolean;
   totalPoints: number;
@@ -94,6 +101,10 @@ interface PlaytimeContextValue {
   // ----- Đồng bộ Supabase -----
   syncState: SyncState;
   syncError: string | null;
+  /** Thiết bị có mạng hay không (theo NetInfo) */
+  isOnline: boolean;
+  /** Số thay đổi còn chờ đẩy lên server */
+  pendingChanges: number;
   /** Thời điểm đồng bộ thành công gần nhất, dạng ISO string */
   lastSyncedAt: string | null;
   /** Đồng bộ ngay lập tức (nút bấm thủ công của phụ huynh) */
@@ -116,8 +127,16 @@ function isNewer(candidate: string, reference: string): boolean {
 }
 
 export function PlaytimeProvider({ children }: { children: React.ReactNode }) {
-  const { isConfigured, user } = useAuth();
-  const userId = user?.id ?? null;
+  const { isConfigured, session } = useAuth();
+
+  /**
+   * Tài khoản đang đăng nhập. Mọi dữ liệu — cả trong AsyncStorage lẫn trên
+   * Turso — đều tách riêng theo id này.
+   */
+  const currentUserId = session?.userId ?? null;
+
+  /** Token phiên, dùng cho sync engine */
+  const sessionToken = session?.token ?? null;
 
   const [hydrated, setHydrated] = useState(false);
   const [totalPoints, setTotalPoints] = useState(0);
@@ -135,42 +154,64 @@ export function PlaytimeProvider({ children }: { children: React.ReactNode }) {
   const [syncState, setSyncState] = useState<SyncState>('disabled');
   const [syncError, setSyncError] = useState<string | null>(null);
   const [lastSyncedAt, setLastSyncedAt] = useState<string | null>(null);
+  const [isOnline, setIsOnline] = useState(true);
+  const [pendingChanges, setPendingChanges] = useState(0);
 
   /** Bản sao state để các hàm async đọc giá trị mới nhất mà không bị stale */
   const stateRef = useRef({
     totalPoints,
     availableSeconds,
     masteredQuestionIds,
+    highestCompletedWeek,
     lastUpdated,
   });
-  stateRef.current = { totalPoints, availableSeconds, masteredQuestionIds, lastUpdated };
-
-  /** Mốc `lastUpdated` đã đẩy lên Supabase thành công gần nhất */
-  const syncedStampRef = useRef<string | null>(null);
-  const lastPushAtRef = useRef(0);
-  const syncingRef = useRef(false);
+  stateRef.current = {
+    totalPoints,
+    availableSeconds,
+    masteredQuestionIds,
+    highestCompletedWeek,
+    lastUpdated,
+  };
 
   /** Đánh dấu dữ liệu vừa thay đổi */
   const touch = useCallback(() => setLastUpdated(new Date().toISOString()), []);
 
-  // ----- Đọc dữ liệu đã lưu khi mở ứng dụng -----
+  // ----- Đọc dữ liệu của tài khoản hiện tại; đổi tài khoản thì tải lại -----
   useEffect(() => {
     let cancelled = false;
 
+    // Chưa đăng nhập: không có dữ liệu nào để hiển thị
+    if (!currentUserId) {
+      setHydrated(false);
+      setTotalPoints(0);
+      setAvailableSeconds(0);
+      setMasteredQuestionIds([]);
+      setHighestCompletedWeek(0);
+      setLastUpdated(null);
+      setIsPlaying(false);
+      return;
+    }
+
+    // Xoá sạch state của tài khoản trước rồi mới nạp tài khoản mới,
+    // để không có khoảnh khắc nào hiện điểm/giờ của người khác.
+    setHydrated(false);
+    setTotalPoints(0);
+    setAvailableSeconds(0);
+    setMasteredQuestionIds([]);
+    setHighestCompletedWeek(0);
+    setLastUpdated(null);
+    setIsPlaying(false);
+
     (async () => {
       try {
-        const raw = await AsyncStorage.getItem(STORAGE_KEY);
-        if (!cancelled && raw) {
-          const saved = JSON.parse(raw) as Partial<StoredProgress>;
-          setTotalPoints(Math.max(0, Math.floor(saved.totalPoints ?? 0)));
-          setAvailableSeconds(clampSeconds(saved.availableSeconds ?? 0));
-          setMasteredQuestionIds(
-            Array.isArray(saved.masteredQuestionIds) ? saved.masteredQuestionIds : [],
-          );
-          setHighestCompletedWeek(
-            Math.min(TOTAL_WEEKS, Math.max(0, Math.floor(saved.highestCompletedWeek ?? 0))),
-          );
-          setLastUpdated(saved.lastUpdated ?? null);
+        // Đọc thẳng từ Local: chỉ vài ms, không gọi mạng
+        const saved = await readLocalProgress(currentUserId);
+        if (!cancelled && saved) {
+          setTotalPoints(saved.totalPoints);
+          setAvailableSeconds(clampSeconds(saved.availableSeconds));
+          setMasteredQuestionIds(saved.masteredQuestionIds);
+          setHighestCompletedWeek(Math.min(TOTAL_WEEKS, saved.highestCompletedWeek));
+          setLastUpdated(saved.lastUpdated);
         }
       } catch (error) {
         console.warn('[playtime] Không đọc được tiến độ đã lưu:', error);
@@ -182,14 +223,14 @@ export function PlaytimeProvider({ children }: { children: React.ReactNode }) {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [currentUserId]);
 
   // ----- Lưu dữ liệu mỗi khi tiến độ thay đổi (có debounce) -----
   useEffect(() => {
-    if (!hydrated || lastUpdated === null) return;
+    if (!hydrated || lastUpdated === null || !currentUserId) return;
 
     const timeoutId = setTimeout(() => {
-      const payload: StoredProgress = {
+      const snapshot: StoredProgress = {
         version: 1,
         totalPoints,
         availableSeconds,
@@ -197,9 +238,21 @@ export function PlaytimeProvider({ children }: { children: React.ReactNode }) {
         highestCompletedWeek,
         lastUpdated,
       };
-      AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(payload)).catch((error) =>
-        console.warn('[playtime] Không lưu được tiến độ:', error),
-      );
+
+      // 1) Ghi Local trước — đây mới là nơi dữ liệu được coi là đã lưu
+      void writeLocalProgress(currentUserId, snapshot);
+
+      // 2) Xếp vào hàng đợi để engine đẩy lên server sau. Không await, nên
+      //    dù đang offline UI cũng không hề chờ.
+      if (isApiConfigured && sessionToken) {
+        syncEngine.queueProgress(currentUserId, sessionToken, {
+          totalPoints,
+          accumulatedGameMinutes: Math.floor(availableSeconds / 60),
+          masteredQuestionIds,
+          highestCompletedWeek,
+          lastUpdated,
+        });
+      }
     }, 600);
 
     return () => clearTimeout(timeoutId);
@@ -210,6 +263,8 @@ export function PlaytimeProvider({ children }: { children: React.ReactNode }) {
     masteredQuestionIds,
     highestCompletedWeek,
     lastUpdated,
+    currentUserId,
+    sessionToken,
   ]);
 
   // ----- Đồng hồ đếm ngược -----
@@ -254,129 +309,78 @@ export function PlaytimeProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   /* ---------------------------------------------------------------- */
-  /* Đồng bộ Supabase                                                  */
+  /* Đồng bộ ngầm qua Sync Engine                                      */
   /* ---------------------------------------------------------------- */
 
-  const buildPayload = useCallback((): ProgressSyncPayload => {
-    const current = stateRef.current;
-    return {
-      totalPoints: current.totalPoints,
-      // `UserProgress` tính theo phút nên phần giây lẻ không được đẩy lên.
-      // Dùng `floor` để không bao giờ tặng thêm thời gian cho học sinh.
-      accumulatedGameMinutes: Math.floor(current.availableSeconds / 60),
-      masteredQuestionIds: current.masteredQuestionIds,
-      lastUpdated: current.lastUpdated ?? new Date().toISOString(),
-    };
+  // Khởi động engine một lần cho cả app; nó tự lắng nghe NetInfo
+  useEffect(() => {
+    syncEngine.start();
+    const unsubscribe = syncEngine.subscribe((engine: EngineState) => {
+      setIsOnline(engine.online);
+      setPendingChanges(engine.pending);
+      setSyncError(engine.error);
+      setLastSyncedAt(engine.lastSyncedAt);
+      setSyncState(
+        !isApiConfigured
+          ? 'disabled'
+          : engine.status === 'offline'
+            ? 'offline'
+            : engine.status === 'syncing'
+              ? 'syncing'
+              : engine.status === 'error'
+                ? 'error'
+                : engine.status === 'synced'
+                  ? 'synced'
+                  : 'idle',
+      );
+    });
+    return unsubscribe;
   }, []);
 
-  const pushNow = useCallback(
-    async (targetUserId: string) => {
-      if (syncingRef.current) return;
+  /**
+   * Tải dữ liệu server rồi hợp nhất — chạy NGẦM, không chặn UI.
+   * UI đã hiển thị dữ liệu Local từ trước đó vài ms.
+   */
+  const pullAndMerge = useCallback(async (token: string) => {
+    const result = await syncEngine.pull(token);
+    if (!result.ok || !result.data) return;
 
-      syncingRef.current = true;
-      setSyncState('syncing');
+    const remote = result.data;
+    const winner = resolveConflict(stateRef.current.lastUpdated, remote.lastUpdated);
 
-      const payload = buildPayload();
-      const result = await pushRemoteProgress(targetUserId, payload);
+    // Local mới hơn thì giữ nguyên; hàng đợi sẽ tự đẩy bản Local lên
+    if (winner === 'local') return;
 
-      lastPushAtRef.current = Date.now();
-      syncingRef.current = false;
+    setIsPlaying(false);
+    setTotalPoints(Math.max(0, Math.floor(remote.totalPoints)));
+    setAvailableSeconds(clampSeconds(remote.accumulatedGameMinutes * 60));
+    setMasteredQuestionIds(remote.masteredQuestionIds);
+    setHighestCompletedWeek(
+      Math.min(TOTAL_WEEKS, Math.max(0, Math.floor(remote.highestCompletedWeek))),
+    );
+    setLastUpdated(remote.lastUpdated);
+  }, []);
 
-      if (!result.ok) {
-        setSyncError(result.error);
-        setSyncState('error');
-        return;
-      }
-
-      syncedStampRef.current = payload.lastUpdated;
-      setLastSyncedAt(new Date().toISOString());
-      setSyncError(null);
-      setSyncState('synced');
-    },
-    [buildPayload],
-  );
-
-  const pullAndMerge = useCallback(
-    async (targetUserId: string) => {
-      if (syncingRef.current) return;
-
-      syncingRef.current = true;
-      setSyncState('syncing');
-
-      const result = await fetchRemoteProgress(targetUserId);
-      syncingRef.current = false;
-
-      if (!result.ok) {
-        setSyncError(result.error);
-        setSyncState('error');
-        return;
-      }
-
-      const remote = result.data;
-      const localStamp = stateRef.current.lastUpdated;
-
-      // Tài khoản chưa có dữ liệu → đẩy tiến độ của máy này lên.
-      if (remote === null) {
-        await pushNow(targetUserId);
-        return;
-      }
-
-      // Máy mới cài, hoặc dữ liệu trên server mới hơn → lấy về.
-      if (localStamp === null || isNewer(remote.lastUpdated, localStamp)) {
-        setIsPlaying(false);
-        setTotalPoints(Math.max(0, Math.floor(remote.totalPoints)));
-        setAvailableSeconds(clampSeconds(remote.accumulatedGameMinutes * 60));
-        setMasteredQuestionIds(remote.masteredQuestionIds);
-        setLastUpdated(remote.lastUpdated);
-
-        syncedStampRef.current = remote.lastUpdated;
-        lastPushAtRef.current = Date.now();
-        setLastSyncedAt(new Date().toISOString());
-        setSyncError(null);
-        setSyncState('synced');
-        return;
-      }
-
-      // Dữ liệu máy này mới hơn → đẩy lên.
-      await pushNow(targetUserId);
-    },
-    [pushNow],
-  );
-
-  // Đăng nhập / đăng xuất → cập nhật trạng thái và kéo dữ liệu về
+  // Đăng nhập / đổi tài khoản → kéo dữ liệu về, nhưng không chờ
   useEffect(() => {
-    if (!isConfigured) {
+    if (!isApiConfigured) {
       setSyncState('disabled');
       return;
     }
-    if (!userId) {
+    if (!sessionToken) {
       setSyncState('signedOut');
-      syncedStampRef.current = null;
-      setSyncError(null);
       return;
     }
     if (!hydrated) return;
 
-    void pullAndMerge(userId);
-  }, [isConfigured, userId, hydrated, pullAndMerge]);
-
-  // Tiến độ thay đổi → đẩy lên Supabase (có throttle)
-  useEffect(() => {
-    if (!isConfigured || !userId || !hydrated) return;
-    if (lastUpdated === null || syncedStampRef.current === lastUpdated) return;
-
-    const delay = Math.max(0, PUSH_THROTTLE_MS - (Date.now() - lastPushAtRef.current));
-    const timeoutId = setTimeout(() => {
-      void pushNow(userId);
-    }, delay);
-
-    return () => clearTimeout(timeoutId);
-  }, [isConfigured, userId, hydrated, lastUpdated, pushNow]);
+    void pullAndMerge(sessionToken);
+  }, [sessionToken, hydrated, pullAndMerge]);
 
   const syncNow = useCallback(async () => {
-    if (!isConfigured || !userId) return;
-    await pullAndMerge(userId);
-  }, [isConfigured, userId, pullAndMerge]);
+    if (!isApiConfigured || !sessionToken) return;
+    await syncEngine.flush();
+    await pullAndMerge(sessionToken);
+  }, [sessionToken, pullAndMerge]);
 
   /* ---------------------------------------------------------------- */
   /* Hành động                                                         */
@@ -493,6 +497,9 @@ export function PlaytimeProvider({ children }: { children: React.ReactNode }) {
 
   const value = useMemo<PlaytimeContextValue>(
     () => ({
+      currentUser: session
+        ? { userId: session.userId, username: session.username, role: session.role }
+        : null,
       hydrated,
       totalPoints,
       availableSeconds,
@@ -515,10 +522,13 @@ export function PlaytimeProvider({ children }: { children: React.ReactNode }) {
       resetProgress,
       syncState,
       syncError,
+      isOnline,
+      pendingChanges,
       lastSyncedAt,
       syncNow,
     }),
     [
+      session,
       hydrated,
       totalPoints,
       availableSeconds,
@@ -536,6 +546,8 @@ export function PlaytimeProvider({ children }: { children: React.ReactNode }) {
       resetProgress,
       syncState,
       syncError,
+      isOnline,
+      pendingChanges,
       lastSyncedAt,
       syncNow,
     ],

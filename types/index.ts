@@ -91,20 +91,41 @@ export interface StoredProgress {
  */
 export interface ProgressSyncPayload extends UserProgress {
   masteredQuestionIds: string[];
+  /** Tuần Toán cao nhất đã vượt qua, để tiến độ lộ trình đồng bộ được */
+  highestCompletedWeek: number;
 }
 
 /** Trạng thái đồng bộ hiển thị cho phụ huynh */
 export type SyncState =
-  /** Chưa cấu hình biến môi trường Supabase */
+  /** Chưa cấu hình máy chủ đồng bộ */
   | 'disabled'
   /** Đã cấu hình nhưng chưa đăng nhập */
   | 'signedOut'
+  /** Đã đăng nhập, chưa có gì cần đồng bộ */
+  | 'idle'
+  /** Mất mạng — thay đổi đang xếp trong hàng đợi ở Local */
+  | 'offline'
   | 'syncing'
   | 'synced'
   | 'error';
 
 /** Kết quả một lời gọi tới Supabase */
 export type SyncResult<T> = { ok: true; data: T } | { ok: false; error: string };
+
+/** Vai trò tài khoản */
+export type UserRole = 'student' | 'parent';
+
+/** Tài khoản đang đăng nhập, lưu trong AsyncStorage */
+export interface SessionUser {
+  userId: string;
+  username: string;
+  role: UserRole;
+}
+
+/** Phiên đăng nhập: thông tin user kèm token đã ký để server xác thực */
+export interface AuthSession extends SessionUser {
+  token: string;
+}
 
 /** Trạng thái của một tuần học trên màn hình chọn tuần */
 export type WeekStatus = 'completed' | 'current' | 'locked';
