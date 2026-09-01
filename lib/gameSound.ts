@@ -7,9 +7,9 @@
  * dưới đây im lặng thay vì làm app sập.
  *
  * Muốn có tiếng trên Android thì cần thêm `expo-audio` + `expo-file-system`:
- * ghi mảng byte WAV do `renderWav()` sinh ra thành file trong thư mục cache rồi
- * phát bằng `createAudioPlayer('file://...')`. Đã tách sẵn phần sinh sóng ra
- * `describe()` để bước đó chỉ việc dùng lại, không phải viết lại.
+ * dựng mảng byte WAV từ mô tả sóng của `describe()`, ghi thành file trong thư
+ * mục cache rồi phát bằng `createAudioPlayer('file://...')`. Phần mô tả sóng đã
+ * tách riêng sẵn nên bước đó chỉ việc dùng lại, không phải định nghĩa lại.
  */
 
 export type SoundName =
@@ -20,6 +20,7 @@ export type SoundName =
   | 'hurt'
   | 'wave'
   | 'boss'
+  | 'powerup'
   | 'gameOver';
 
 interface ToneSpec {
@@ -67,6 +68,9 @@ export function describe(name: SoundName): ToneSpec {
         gain: 0.28,
         noise: true,
       };
+    case 'powerup':
+      // Quãng đi lên nghe như "được thưởng"
+      return { type: 'sine', fromHz: 660, toHz: 1760, duration: 0.26, gain: 0.2 };
     case 'gameOver':
       return { type: 'triangle', fromHz: 520, toHz: 80, duration: 0.7, gain: 0.24 };
   }
@@ -101,6 +105,7 @@ const MIN_GAP_MS: Record<SoundName, number> = {
   hurt: 160,
   wave: 400,
   boss: 800,
+  powerup: 200,
   gameOver: 800,
 };
 

@@ -41,6 +41,7 @@ import { GAMES } from './games/catalog';
 import ColorSortGame from './games/ColorSortGame';
 import MarioMiniGame from './games/MarioMiniGame';
 import PenaltyGame from './games/PenaltyGame';
+import RacingGame from './games/RacingGame';
 import ZombieGame from './games/ZombieGame';
 
 export default function GameVaultScreen() {
@@ -235,6 +236,7 @@ export default function GameVaultScreen() {
         {activeGame === 'color-sort' && <ColorSortGame onExit={closeGame} />}
         {activeGame === 'penalty' && <PenaltyGame onExit={closeGame} />}
         {activeGame === 'zombie' && <ZombieGame onExit={closeGame} />}
+        {activeGame === 'racing' && <RacingGame onExit={closeGame} />}
       </Modal>
     </KeyboardAvoidingView>
   );

@@ -35,4 +35,12 @@ export const GAMES: GameInfo[] = [
     color: '#166534',
     softColor: '#DCFCE7',
   },
+  {
+    id: 'racing',
+    name: 'Đua Xe Tri Thức',
+    emoji: '🏁',
+    description: 'Trả lời đúng và nhanh để xe bứt phá về đích trước đối thủ.',
+    color: '#B45309',
+    softColor: '#FEF3C7',
+  },
 ];

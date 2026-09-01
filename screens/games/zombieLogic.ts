@@ -21,9 +21,21 @@ export type UpgradeId =
   | 'fireRate'
   | 'moveSpeed'
   | 'maxHp'
-  | 'magnet'
+  | 'goldBonus'
   | 'multishot'
   | 'pierce';
+
+/**
+ * Vật phẩm hỗ trợ tạm thời, rơi ra khi hạ zombie.
+ *  - shield: bất tử trong SHIELD_SECONDS giây
+ *  - nuke:   nổ tiêu diệt toàn bộ zombie THƯỜNG đang có trên sân
+ *  - frenzy: nhân đôi tốc độ bắn trong FRENZY_SECONDS giây
+ *  - goldbag: thưởng ngay một túi vàng
+ *
+ * Trước đây có vật phẩm 🧲 hút vàng trên sân. Vàng giờ tự cộng ngay khi zombie
+ * chết nên không còn gì để hút, chỗ đó đổi thành túi vàng thưởng ngay.
+ */
+export type PowerUpKind = 'shield' | 'nuke' | 'frenzy' | 'goldbag';
 
 /** Tín hiệu để phần vẽ phát âm thanh — logic không tự phát tiếng */
 export type SoundEvent =
@@ -34,6 +46,7 @@ export type SoundEvent =
   | 'hurt'
   | 'wave'
   | 'boss'
+  | 'powerup'
   | 'gameOver';
 
 export interface Player {
@@ -47,6 +60,10 @@ export interface Player {
   /** Hướng nhìn, dùng khi bắn mà không có zombie nào để nhắm */
   aimX: number;
   aimY: number;
+  /** Giây còn lại của giáp bất tử (vật phẩm 🛡️) */
+  shield: number;
+  /** Giây còn lại của siêu tốc đạn (vật phẩm ⚡) */
+  frenzy: number;
 }
 
 export interface Zombie {
@@ -96,13 +113,28 @@ export interface Particle {
   color: string;
 }
 
-export interface GoldDrop {
+/**
+ * Số vàng nảy lên khi hạ zombie ("+$5").
+ *
+ * Không còn cục vàng nằm trên đất phải chạy tới nhặt: vàng cộng thẳng vào ví
+ * ngay lúc zombie chết, thứ này chỉ để người chơi THẤY mình vừa được bao nhiêu.
+ */
+export interface GoldPop {
   id: number;
   x: number;
   y: number;
-  vx: number;
-  vy: number;
-  value: number;
+  amount: number;
+  /** Giây còn lại trước khi con số mờ đi và mất */
+  ttl: number;
+}
+
+export interface PowerUpDrop {
+  id: number;
+  x: number;
+  y: number;
+  kind: PowerUpKind;
+  /** Giây còn lại trước khi vật phẩm biến mất */
+  ttl: number;
 }
 
 export interface Input {
@@ -121,7 +153,8 @@ export interface World {
   bullets: Bullet[];
   enemyBullets: Bullet[];
   particles: Particle[];
-  golds: GoldDrop[];
+  goldPops: GoldPop[];
+  powerUps: PowerUpDrop[];
 
   wave: number;
   /** Số zombie còn phải sinh ra trong wave hiện tại */
@@ -159,9 +192,71 @@ export interface World {
 export const MAX_ZOMBIES_ALIVE = 18;
 export const MAX_BULLETS = 40;
 export const MAX_PARTICLES = 26;
-export const MAX_GOLDS = 14;
+export const MAX_GOLD_POPS = 10;
+export const MAX_POWERUPS = 4;
 /** Cứ 5 wave lại có một con boss */
 export const BOSS_EVERY = 5;
+
+/* ---- Vật phẩm buff ---- */
+export const SHIELD_SECONDS = 5;
+/** Số vàng của vật phẩm 💰 Túi vàng */
+export const GOLDBAG_AMOUNT = 40;
+export const FRENZY_SECONDS = 6;
+/** Vật phẩm nằm chờ trên sân bao lâu thì biến mất */
+export const POWERUP_TTL = 12;
+
+export interface PowerUpSpec {
+  kind: PowerUpKind;
+  emoji: string;
+  name: string;
+  hint: string;
+  color: string;
+}
+
+export const POWERUPS: Record<PowerUpKind, PowerUpSpec> = {
+  shield: {
+    kind: 'shield',
+    emoji: '🛡️',
+    name: 'Giáp bất tử',
+    hint: `Không mất máu trong ${SHIELD_SECONDS} giây`,
+    color: '#38BDF8',
+  },
+  nuke: {
+    kind: 'nuke',
+    emoji: '💣',
+    name: 'Bom huỷ diệt',
+    hint: 'Nổ hạ sạch zombie thường trên sân',
+    color: '#F97316',
+  },
+  frenzy: {
+    kind: 'frenzy',
+    emoji: '⚡',
+    name: 'Siêu tốc đạn',
+    hint: `Bắn nhanh gấp đôi trong ${FRENZY_SECONDS} giây`,
+    color: '#FACC15',
+  },
+  goldbag: {
+    kind: 'goldbag',
+    emoji: '💰',
+    name: 'Túi vàng',
+    hint: `Thưởng ngay ${GOLDBAG_AMOUNT} vàng`,
+    color: '#A78BFA',
+  },
+};
+
+export const POWERUP_ORDER: PowerUpKind[] = ['shield', 'nuke', 'frenzy', 'goldbag'];
+
+/**
+ * Tỉ lệ rơi vật phẩm theo loại zombie. Zombie khoẻ thì rơi nhiều hơn để việc
+ * hạ chúng đáng công sức; boss thì chắc chắn rơi.
+ */
+const DROP_CHANCE: Record<ZombieKind, number> = {
+  normal: 0.05,
+  fast: 0.05,
+  boomer: 0.08,
+  tank: 0.18,
+  boss: 1,
+};
 
 export interface WeaponSpec {
   id: WeaponId;
@@ -252,76 +347,96 @@ export interface UpgradeSpec {
   maxLevel: number;
   /** Giá bậc đầu; mỗi bậc sau đắt hơn theo `priceAt()` */
   basePrice: number;
+  /** Nhãn ngắn hiện trên ô nâng cấp, vd "+15 dmg" */
+  step: string;
   describe: (level: number) => string;
 }
+
+/* ---- Mỗi bậc nâng cấp cộng một lượng CỐ ĐỊNH ---- */
+export const DAMAGE_STEP = 15;
+export const FIRE_RATE_STEP_MS = 50;
+/** Khoảng nghỉ giữa hai phát không được xuống dưới mức này */
+export const MIN_FIRE_INTERVAL = 0.06;
+export const MOVE_SPEED_STEP = 0.5;
+/** 1 điểm "tốc độ" của mẫu tương ứng bao nhiêu dp/giây */
+export const MOVE_SPEED_UNIT = 22;
+export const MAX_HP_STEP = 25;
 
 export const UPGRADES: Record<UpgradeId, UpgradeSpec> = {
   damage: {
     id: 'damage',
     name: 'Sát thương',
     emoji: '⚔️',
-    maxLevel: 8,
-    basePrice: 40,
-    describe: (l) => `+${l * 15}% sát thương`,
+    maxLevel: 10,
+    basePrice: 20,
+    step: '+15 dmg',
+    describe: (l) => `+${l * DAMAGE_STEP} sát thương`,
   },
   fireRate: {
     id: 'fireRate',
     name: 'Tốc độ bắn',
     emoji: '⚡',
-    maxLevel: 8,
-    basePrice: 45,
-    describe: (l) => `Bắn nhanh hơn ${Math.round((1 - 0.92 ** l) * 100)}%`,
+    maxLevel: 5,
+    basePrice: 30,
+    step: '-50ms',
+    describe: (l) => `Bắn nhanh hơn ${l * FIRE_RATE_STEP_MS}ms`,
   },
   moveSpeed: {
     id: 'moveSpeed',
     name: 'Tốc độ chạy',
-    emoji: '👟',
-    maxLevel: 6,
-    basePrice: 35,
-    describe: (l) => `+${l * 8}% tốc độ chạy`,
+    emoji: '🏃',
+    maxLevel: 8,
+    basePrice: 25,
+    step: '+0.5',
+    describe: (l) => `+${(l * 0.5).toFixed(1)} tốc độ chạy`,
   },
   maxHp: {
     id: 'maxHp',
     name: 'Máu tối đa',
-    emoji: '❤️',
-    maxLevel: 8,
-    basePrice: 40,
-    describe: (l) => `+${l * 20} máu tối đa`,
-  },
-  magnet: {
-    id: 'magnet',
-    name: 'Hút vàng',
-    emoji: '🧲',
-    maxLevel: 5,
-    basePrice: 30,
-    describe: (l) => `Hút vàng từ xa ${40 + l * 45} điểm`,
+    emoji: '🛡️',
+    maxLevel: 10,
+    basePrice: 35,
+    step: '+25 max',
+    describe: (l) => `+${l * MAX_HP_STEP} máu tối đa`,
   },
   multishot: {
     id: 'multishot',
     name: 'Đa đạn',
     emoji: '🔱',
     maxLevel: 3,
-    basePrice: 90,
+    basePrice: 60,
+    step: '+1 viên',
     describe: (l) => `Mỗi lượt bắn thêm ${l} viên`,
   },
   pierce: {
     id: 'pierce',
     name: 'Xuyên giáp',
-    emoji: '🗡️',
+    emoji: '🎯',
     maxLevel: 3,
-    basePrice: 80,
+    basePrice: 50,
+    step: '+1 xuyên',
     describe: (l) => `Đạn xuyên thêm ${l} zombie`,
+  },
+  goldBonus: {
+    id: 'goldBonus',
+    name: 'Thưởng vàng',
+    emoji: '🧲',
+    maxLevel: 6,
+    basePrice: 20,
+    step: '+25% vàng',
+    describe: (l) => `Hạ zombie được thêm ${l * 25}% vàng`,
   },
 };
 
+/** Thứ tự 8 ô trong lưới nâng cấp 2 cột × 4 hàng (ô "Hồi máu" chèn ở vị trí 4) */
 export const UPGRADE_ORDER: UpgradeId[] = [
   'damage',
   'fireRate',
   'moveSpeed',
   'maxHp',
-  'magnet',
   'multishot',
   'pierce',
+  'goldBonus',
 ];
 
 /** Giá của bậc nâng cấp tiếp theo. Trả về `null` khi đã đạt bậc tối đa. */
@@ -366,23 +481,33 @@ function pushEvent(world: World, event: SoundEvent): void {
 /* ------------------------------------------------------------------ */
 
 export function playerSpeed(world: World): number {
-  return 132 * (1 + world.upgrades.moveSpeed * 0.08);
+  // 6 điểm tốc độ cơ bản, mỗi bậc nâng cấp thêm 0.5 điểm
+  const points = 6 + world.upgrades.moveSpeed * MOVE_SPEED_STEP;
+  return points * MOVE_SPEED_UNIT;
 }
 
 export function bulletDamage(world: World): number {
-  return WEAPONS[world.weapon].damage * (1 + world.upgrades.damage * 0.15);
+  return WEAPONS[world.weapon].damage + world.upgrades.damage * DAMAGE_STEP;
 }
 
 export function fireInterval(world: World): number {
-  return WEAPONS[world.weapon].interval * 0.92 ** world.upgrades.fireRate;
+  // Mỗi bậc bớt 50ms, nhưng có sàn: nếu không chặn thì súng máy (100ms) chỉ cần
+  // 2 bậc là về 0 và bắn vô hạn phát mỗi khung hình.
+  const base = Math.max(
+    MIN_FIRE_INTERVAL,
+    WEAPONS[world.weapon].interval - (world.upgrades.fireRate * FIRE_RATE_STEP_MS) / 1000,
+  );
+  // Vật phẩm ⚡ nhân đôi tốc độ bắn, tức chia đôi khoảng nghỉ giữa hai phát
+  return world.player.frenzy > 0 ? Math.max(MIN_FIRE_INTERVAL / 2, base / 2) : base;
 }
 
-export function magnetRadius(world: World): number {
-  return 40 + world.upgrades.magnet * 45;
+/** Hệ số thưởng vàng theo bậc nâng cấp "Thưởng vàng" */
+export function goldMultiplier(world: World): number {
+  return 1 + world.upgrades.goldBonus * 0.25;
 }
 
 export function maxHpOf(world: World): number {
-  return 100 + world.upgrades.maxHp * 20;
+  return 100 + world.upgrades.maxHp * MAX_HP_STEP;
 }
 
 /* ------------------------------------------------------------------ */
@@ -396,18 +521,23 @@ export function createWorld(areaW: number, areaH: number, seed = 20260901): Worl
     player: {
       x: areaW / 2,
       y: areaH / 2,
-      radius: 14,
+      // 18 chứ không phải 14: trên điện thoại, nhân vật 14dp nhỏ hơn cả zombie
+      // Tank nên rất khó nhìn thấy mình đang ở đâu giữa đám đông.
+      radius: 18,
       hp: 100,
       maxHp: 100,
       invuln: 0,
       aimX: 0,
       aimY: -1,
+      shield: 0,
+      frenzy: 0,
     },
     zombies: [],
     bullets: [],
     enemyBullets: [],
     particles: [],
-    golds: [],
+    goldPops: [],
+    powerUps: [],
 
     wave: 0,
     spawnQueue: 0,
@@ -428,7 +558,7 @@ export function createWorld(areaW: number, areaH: number, seed = 20260901): Worl
       fireRate: 0,
       moveSpeed: 0,
       maxHp: 0,
-      magnet: 0,
+      goldBonus: 0,
       multishot: 0,
       pierce: 0,
     },
@@ -630,25 +760,26 @@ function fire(world: World): void {
 /* Sát thương và cái chết                                              */
 /* ------------------------------------------------------------------ */
 
-function dropGold(world: World, z: Zombie): void {
-  if (world.golds.length >= MAX_GOLDS) {
-    // Sân đã đầy vàng: cộng thẳng vào ví để công sức không bị mất
-    world.gold += z.gold;
-    world.goldEarned += z.gold;
-    return;
+/**
+ * Cộng vàng NGAY khi zombie chết, không rơi ra đất.
+ *
+ * Bỏ cơ chế nhặt vàng vì nó buộc học sinh phải chạy vào giữa đám zombie để lấy
+ * phần thưởng của mình — vừa khó vừa dễ chết oan.
+ */
+function giveGold(world: World, amount: number, x: number, y: number): void {
+  const total = Math.max(1, Math.round(amount * goldMultiplier(world)));
+  world.gold += total;
+  world.goldEarned += total;
+  world.score += total;
+
+  if (world.goldPops.length < MAX_GOLD_POPS) {
+    world.goldPops.push({ id: world.nextId++, x, y, amount: total, ttl: 0.9 });
   }
-  const angle = rand(world) * Math.PI * 2;
-  world.golds.push({
-    id: world.nextId++,
-    x: z.x,
-    y: z.y,
-    vx: Math.cos(angle) * 40,
-    vy: Math.sin(angle) * 40,
-    value: z.gold,
-  });
 }
 
 function hurtPlayer(world: World, amount: number): void {
+  // Giáp 🛡️ chặn sạch sát thương, kể cả sát thương diện rộng của zombie nổ
+  if (world.player.shield > 0) return;
   if (world.player.invuln > 0) return;
   world.player.hp = Math.max(0, world.player.hp - amount);
   world.player.invuln = 0.6;
@@ -675,10 +806,59 @@ function explode(world: World, x: number, y: number, radius: number, damage: num
   }
 }
 
+/** Rơi vật phẩm buff theo tỉ lệ của loại zombie. Boss rơi hai cái. */
+function dropPowerUp(world: World, z: Zombie): void {
+  const times = z.kind === 'boss' ? 2 : 1;
+  for (let i = 0; i < times; i++) {
+    if (world.powerUps.length >= MAX_POWERUPS) return;
+    if (rand(world) >= DROP_CHANCE[z.kind]) continue;
+
+    const kind = POWERUP_ORDER[Math.floor(rand(world) * POWERUP_ORDER.length)];
+    world.powerUps.push({
+      id: world.nextId++,
+      x: clamp(z.x + randRange(world, -14, 14), 12, world.areaW - 12),
+      y: clamp(z.y + randRange(world, -14, 14), 12, world.areaH - 12),
+      kind,
+      ttl: POWERUP_TTL,
+    });
+  }
+}
+
+/** Áp dụng hiệu ứng của vật phẩm vừa nhặt */
+function applyPowerUp(world: World, kind: PowerUpKind): void {
+  const p = world.player;
+  pushEvent(world, 'powerup');
+
+  switch (kind) {
+    case 'shield':
+      p.shield = SHIELD_SECONDS;
+      break;
+    case 'frenzy':
+      p.frenzy = FRENZY_SECONDS;
+      break;
+    case 'goldbag':
+      giveGold(world, GOLDBAG_AMOUNT, p.x, p.y);
+      break;
+    case 'nuke': {
+      // Chỉ hạ zombie THƯỜNG — boss, tank và zombie nhanh vẫn còn, để vật phẩm
+      // này mạnh nhưng không xoá sạch cả wave boss.
+      const doomed = world.zombies.filter((z) => z.kind === 'normal');
+      for (const z of doomed) {
+        spawnParticles(world, z.x, z.y, 3, '#F97316', 200);
+        killZombie(world, z);
+      }
+      world.zombies = world.zombies.filter((z) => z.kind !== 'normal');
+      pushEvent(world, 'explosion');
+      break;
+    }
+  }
+}
+
 function killZombie(world: World, z: Zombie): void {
   world.kills += 1;
   world.score += z.kind === 'boss' ? 500 : z.kind === 'tank' ? 60 : 20;
-  dropGold(world, z);
+  giveGold(world, z.gold, z.x, z.y);
+  dropPowerUp(world, z);
 
   if (z.kind === 'boomer') {
     explode(world, z.x, z.y, 70, 18);
@@ -711,6 +891,8 @@ export function advance(world: World, dt: number, input: Input): void {
     p.aimY = ny;
   }
   p.invuln = Math.max(0, p.invuln - dt);
+  p.shield = Math.max(0, p.shield - dt);
+  p.frenzy = Math.max(0, p.frenzy - dt);
   p.maxHp = maxHpOf(world);
 
   /* ---- Bắn ---- */
@@ -789,7 +971,7 @@ export function advance(world: World, dt: number, input: Input): void {
       if (z.kind === 'boomer') {
         // Zombie nổ tự huỷ khi tới sát người chơi
         explode(world, z.x, z.y, 70, 18);
-        dropGold(world, z);
+        giveGold(world, z.gold, z.x, z.y);
         world.kills += 1;
         world.score += 20;
         world.zombies.splice(i, 1);
@@ -850,31 +1032,31 @@ export function advance(world: World, dt: number, input: Input): void {
     }
   }
 
-  /* ---- Vàng ---- */
-  const magnet = magnetRadius(world);
-  for (let i = world.golds.length - 1; i >= 0; i--) {
-    const g = world.golds[i];
-    const d = dist(g.x, g.y, p.x, p.y) || 1;
-
-    if (d <= magnet) {
-      // Trong tầm hút thì bay về phía người chơi, càng gần càng nhanh
-      const pull = 260;
-      g.x += ((p.x - g.x) / d) * pull * dt;
-      g.y += ((p.y - g.y) / d) * pull * dt;
-    } else {
-      // Ngoài tầm hút thì trôi chậm dần rồi dừng
-      g.x = clamp(g.x + g.vx * dt, 4, world.areaW - 4);
-      g.y = clamp(g.y + g.vy * dt, 4, world.areaH - 4);
-      g.vx *= 0.9;
-      g.vy *= 0.9;
+  /* ---- Số vàng nảy lên ---- */
+  for (let i = world.goldPops.length - 1; i >= 0; i--) {
+    const pop = world.goldPops[i];
+    pop.ttl -= dt;
+    if (pop.ttl <= 0) {
+      world.goldPops.splice(i, 1);
+      continue;
     }
+    // Bay lên chậm dần để con số dễ đọc
+    pop.y -= 34 * dt;
+  }
 
-    if (d <= p.radius + 12) {
-      world.gold += g.value;
-      world.goldEarned += g.value;
-      world.score += g.value;
-      pushEvent(world, 'gold');
-      world.golds.splice(i, 1);
+  /* ---- Vật phẩm buff ---- */
+  for (let i = world.powerUps.length - 1; i >= 0; i--) {
+    const item = world.powerUps[i];
+    item.ttl -= dt;
+    if (item.ttl <= 0) {
+      world.powerUps.splice(i, 1);
+      continue;
+    }
+    // Vùng nhặt rộng hơn vàng một chút: vật phẩm quý, đừng để trượt
+    if (dist(item.x, item.y, p.x, p.y) <= p.radius + 16) {
+      const kind = item.kind;
+      world.powerUps.splice(i, 1);
+      applyPowerUp(world, kind);
     }
   }
 
@@ -916,7 +1098,7 @@ export function advance(world: World, dt: number, input: Input): void {
 export interface PurchaseResult {
   ok: boolean;
   /** Lý do không mua được, để hiện cho học sinh */
-  reason?: 'notEnoughGold' | 'maxLevel' | 'alreadyOwned';
+  reason?: 'notEnoughGold' | 'maxLevel' | 'alreadyOwned' | 'fullHp';
 }
 
 export function buyUpgrade(world: World, id: UpgradeId): PurchaseResult {
@@ -934,6 +1116,27 @@ export function buyUpgrade(world: World, id: UpgradeId): PurchaseResult {
     world.player.maxHp = maxHpOf(world);
     world.player.hp = Math.min(world.player.maxHp, world.player.hp + 20);
   }
+  return { ok: true };
+}
+
+/* ---- Hồi máu ---- */
+
+/** Số máu hồi mỗi lần mua */
+export const HEAL_AMOUNT = 40;
+/** Giá một lần hồi máu */
+export const HEAL_PRICE = 15;
+
+/**
+ * Mua hồi máu. Khác nâng cấp: mua được nhiều lần, không có bậc, và bị chặn khi
+ * máu đã đầy để không đốt vàng vô ích.
+ */
+export function buyHeal(world: World): PurchaseResult {
+  if (world.player.hp >= maxHpOf(world)) return { ok: false, reason: 'fullHp' };
+  if (world.gold < HEAL_PRICE) return { ok: false, reason: 'notEnoughGold' };
+
+  world.gold -= HEAL_PRICE;
+  world.player.maxHp = maxHpOf(world);
+  world.player.hp = Math.min(world.player.maxHp, world.player.hp + HEAL_AMOUNT);
   return { ok: true };
 }
 
@@ -973,7 +1176,10 @@ export interface Frame {
   bullets: Bullet[];
   enemyBullets: Bullet[];
   particles: Particle[];
-  golds: GoldDrop[];
+  goldPops: GoldPop[];
+  powerUps: PowerUpDrop[];
+  /** Hiệu ứng đang có hiệu lực, kèm số giây còn lại — để hiện lên HUD */
+  effects: { kind: PowerUpKind; seconds: number }[];
   wave: number;
   gold: number;
   goldEarned: number;
@@ -996,7 +1202,16 @@ export function snapshot(world: World): Frame {
     bullets: world.bullets.map((b) => ({ ...b })),
     enemyBullets: world.enemyBullets.map((b) => ({ ...b })),
     particles: world.particles.map((q) => ({ ...q })),
-    golds: world.golds.map((g) => ({ ...g })),
+    goldPops: world.goldPops.map((g) => ({ ...g })),
+    powerUps: world.powerUps.map((u) => ({ ...u })),
+    effects: [
+      ...(world.player.shield > 0
+        ? [{ kind: 'shield' as PowerUpKind, seconds: world.player.shield }]
+        : []),
+      ...(world.player.frenzy > 0
+        ? [{ kind: 'frenzy' as PowerUpKind, seconds: world.player.frenzy }]
+        : []),
+    ],
     wave: world.wave,
     gold: world.gold,
     goldEarned: world.goldEarned,
