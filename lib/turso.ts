@@ -165,28 +165,35 @@ export async function createUser(
   },
   progressId: string,
 ): Promise<boolean> {
-  const existing = await findUserByUsername(client, user.username);
-  if (existing) return false;
-
   const now = new Date().toISOString();
-  const tx = await client.transaction('write');
+
+  // Dùng `batch` chứ KHÔNG dùng `client.transaction()`: client `/web` chạy trên
+  // HTTP nên không hỗ trợ interactive transaction. `batch` được Turso thực thi
+  // nguyên tử, nên vẫn đảm bảo không bao giờ có user thiếu bản ghi tiến độ.
   try {
-    await tx.execute({
-      sql: `INSERT INTO users (id, username, password_hash, role, pin_code, created_at)
-            VALUES (?, ?, ?, ?, ?, ?)`,
-      args: [user.id, user.username, user.passwordHash, user.role, user.pinHash, now],
-    });
-    await tx.execute({
-      sql: `INSERT INTO user_progress (
-              id, user_id, subject, completed_week, total_points,
-              accumulated_game_minutes, mastered_question_ids, updated_at
-            ) VALUES (?, ?, 'chung', 0, 0, 0, '[]', ?)`,
-      args: [progressId, user.id, now],
-    });
-    await tx.commit();
+    await client.batch(
+      [
+        {
+          sql: `INSERT INTO users (id, username, password_hash, role, pin_code, created_at)
+                VALUES (?, ?, ?, ?, ?, ?)`,
+          args: [user.id, user.username, user.passwordHash, user.role, user.pinHash, now],
+        },
+        {
+          sql: `INSERT INTO user_progress (
+                  id, user_id, subject, completed_week, total_points,
+                  accumulated_game_minutes, mastered_question_ids, updated_at
+                ) VALUES (?, ?, 'chung', 0, 0, 0, '[]', ?)`,
+          args: [progressId, user.id, now],
+        },
+      ],
+      'write',
+    );
     return true;
   } catch (error) {
-    await tx.rollback().catch(() => undefined);
+    // Ràng buộc UNIQUE trên username là chốt chặn thật (không có kẽ hở race
+    // như cách kiểm tra trước rồi mới ghi).
+    const message = error instanceof Error ? error.message : String(error);
+    if (/UNIQUE constraint failed/i.test(message)) return false;
     throw error;
   }
 }

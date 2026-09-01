@@ -71,6 +71,35 @@ export default async function handler(): Promise<Response> {
     );
     report.cacBang = tables.rows.map((row) => row.name);
     report.coBangUsers = tables.rows.some((row) => row.name === 'users');
+
+    // Chỉ SELECT được chưa đủ: đăng ký cần GHI theo lô. Thử một lô ghi rồi dọn.
+    const probe = `zz_health_probe_${Date.now()}`;
+    try {
+      await client.batch(
+        [
+          { sql: `CREATE TABLE IF NOT EXISTS ${probe} (v INTEGER)`, args: [] },
+          { sql: `INSERT INTO ${probe} (v) VALUES (?)`, args: [1] },
+          { sql: `DROP TABLE ${probe}`, args: [] },
+        ],
+        'write',
+      );
+      report.ghiTheoLo = 'OK';
+    } catch (error) {
+      report.ghiTheoLo = 'THẤT BẠI';
+      report.loiGhiTheoLo = error instanceof Error ? error.message.slice(0, 200) : String(error);
+    }
+
+    // Client HTTP không hỗ trợ interactive transaction — ghi lại để khỏi đoán
+    try {
+      const tx = await client.transaction('write');
+      await tx.rollback();
+      report.hoTroTransaction = true;
+    } catch (error) {
+      report.hoTroTransaction = false;
+      report.lyDoKhongCoTransaction =
+        error instanceof Error ? error.message.slice(0, 150) : String(error);
+    }
+
     return json(report);
   } catch (error) {
     report.ketNoi = 'THẤT BẠI';
