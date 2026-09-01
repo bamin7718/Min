@@ -22,6 +22,9 @@ export type SoundName =
   | 'boss'
   | 'powerup'
   | 'minigun'
+  | 'kick'
+  | 'cheer'
+  | 'save'
   | 'gameOver';
 
 interface ToneSpec {
@@ -80,6 +83,16 @@ export function describe(name: SoundName): ToneSpec {
         gain: 0.13,
         noise: true,
       };
+    case 'kick':
+      // Tiếng chân sút vào bóng: đục, rất ngắn
+      return { type: 'square', fromHz: 180, toHz: 70, duration: 0.08, gain: 0.2, noise: true };
+    case 'save':
+      // Tiếng găng tay đẩy bóng
+      return { type: 'triangle', fromHz: 300, toHz: 120, duration: 0.16, gain: 0.18, noise: true };
+    case 'cheer':
+      // Khán giả reo hò: tiếng ồn dài dâng lên là thứ gần nhất với tiếng đám đông
+      // mà dao động ký làm được
+      return { type: 'sine', fromHz: 380, toHz: 620, duration: 0.9, gain: 0.22, noise: true };
     case 'powerup':
       // Quãng đi lên nghe như "được thưởng"
       return { type: 'sine', fromHz: 660, toHz: 1760, duration: 0.26, gain: 0.2 };
@@ -120,6 +133,9 @@ const MIN_GAP_MS: Record<SoundName, number> = {
   powerup: 200,
   // 40ms: khớp nhịp 50ms/viên của súng liên thanh nên nghe được từng phát
   minigun: 40,
+  kick: 120,
+  save: 200,
+  cheer: 900,
   gameOver: 800,
 };
 

@@ -2,7 +2,7 @@
   "expo": {
     "name": "Min Education Gamification",
     "slug": "lop3-study-game",
-    "version": "1.0.5",
+    "version": "1.0.6",
     "orientation": "default",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "light",

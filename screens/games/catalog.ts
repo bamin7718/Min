@@ -23,7 +23,7 @@ export const GAMES: GameInfo[] = [
     id: 'penalty',
     name: 'Đá Penalty',
     emoji: '⚽',
-    description: 'Chọn góc sút thật hiểm để vượt qua thủ môn!',
+    description: 'Vuốt để sút xoáy, hạ thủ môn bay người cản phá!',
     color: colors.success,
     softColor: colors.successSoft,
   },
