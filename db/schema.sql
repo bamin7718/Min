@@ -17,6 +17,9 @@ CREATE TABLE IF NOT EXISTS users (
   created_at    TEXT NOT NULL
 );
 
+-- UNIQUE của SQLite phân biệt hoa thường, nhưng đăng nhập tra theo lower().
+CREATE UNIQUE INDEX IF NOT EXISTS idx_users_username_lower ON users (lower(username));
+
 CREATE TABLE IF NOT EXISTS user_progress (
   id                       TEXT PRIMARY KEY,
   user_id                  TEXT NOT NULL REFERENCES users (id) ON DELETE CASCADE,

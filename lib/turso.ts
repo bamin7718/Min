@@ -49,8 +49,65 @@ export function createTursoClient(config: TursoConfig): Client {
 /* Khởi tạo bảng                                                       */
 /* ------------------------------------------------------------------ */
 
-/** Tạo toàn bộ bảng nếu chưa có. An toàn khi gọi nhiều lần. */
+/** Các cột hiện có của một bảng; mảng rỗng nghĩa là bảng chưa tồn tại */
+async function tableColumns(client: Client, table: string): Promise<Set<string>> {
+  const result = await client.execute({
+    sql: 'SELECT name FROM pragma_table_info(?)',
+    args: [table],
+  });
+  return new Set(result.rows.map((row) => String(row.name)));
+}
+
+/**
+ * Chuyển `user_progress` từ schema cũ (khoá chính là `user_id`) sang schema mới
+ * (`id` + `subject`), giữ nguyên dữ liệu đang có.
+ *
+ * Cần thiết vì `CREATE TABLE IF NOT EXISTS` KHÔNG sửa bảng đã tồn tại — bảng cũ
+ * cứ thế nằm im và mọi lệnh INSERT theo schema mới đều lỗi
+ * "table user_progress has no column named id".
+ */
+async function migrateUserProgress(client: Client): Promise<void> {
+  const columns = await tableColumns(client, 'user_progress');
+  if (columns.size === 0) return; // chưa có bảng, phần CREATE bên dưới lo
+  if (columns.has('id') && columns.has('subject')) return; // đã đúng schema mới
+
+  // Bảng cũ có thể thiếu vài cột, nên chọn nguồn dữ liệu tương ứng cho từng cột
+  const week = columns.has('highest_completed_week') ? 'highest_completed_week' : '0';
+  const mastered = columns.has('mastered_question_ids') ? 'mastered_question_ids' : "'[]'";
+  const updated = columns.has('last_updated') ? 'last_updated' : "datetime('now')";
+
+  await client.batch(
+    [
+      'DROP TABLE IF EXISTS user_progress_legacy',
+      'ALTER TABLE user_progress RENAME TO user_progress_legacy',
+      `CREATE TABLE user_progress (
+         id                       TEXT PRIMARY KEY,
+         user_id                  TEXT NOT NULL,
+         subject                  TEXT NOT NULL DEFAULT 'chung',
+         completed_week           INTEGER NOT NULL DEFAULT 0,
+         total_points             INTEGER NOT NULL DEFAULT 0,
+         accumulated_game_minutes INTEGER NOT NULL DEFAULT 0,
+         mastered_question_ids    TEXT NOT NULL DEFAULT '[]',
+         updated_at               TEXT NOT NULL,
+         UNIQUE (user_id, subject)
+       )`,
+      `INSERT INTO user_progress (
+         id, user_id, subject, completed_week, total_points,
+         accumulated_game_minutes, mastered_question_ids, updated_at
+       )
+       SELECT lower(hex(randomblob(16))), user_id, 'chung', ${week}, total_points,
+              accumulated_game_minutes, ${mastered}, ${updated}
+         FROM user_progress_legacy`,
+      'DROP TABLE user_progress_legacy',
+    ],
+    'write',
+  );
+}
+
+/** Tạo toàn bộ bảng nếu chưa có, và nâng cấp bảng cũ. An toàn khi gọi nhiều lần. */
 export async function initDatabase(client: Client): Promise<void> {
+  await migrateUserProgress(client);
+
   await client.batch(
     [
       `CREATE TABLE IF NOT EXISTS users (
@@ -72,6 +129,10 @@ export async function initDatabase(client: Client): Promise<void> {
          updated_at               TEXT NOT NULL,
          UNIQUE (user_id, subject)
        )`,
+      // UNIQUE của SQLite phân biệt hoa thường, nhưng đăng nhập lại tra theo
+      // lower(username). Không có index này thì "Minh" và "minh" thành hai tài
+      // khoản và lệnh đăng nhập sẽ trả về một trong hai một cách tuỳ ý.
+      `CREATE UNIQUE INDEX IF NOT EXISTS idx_users_username_lower ON users (lower(username))`,
       `CREATE INDEX IF NOT EXISTS idx_user_progress_user ON user_progress (user_id)`,
       `CREATE TABLE IF NOT EXISTS quiz_results (
          id              TEXT PRIMARY KEY,
