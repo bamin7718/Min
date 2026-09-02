@@ -89,9 +89,16 @@ tham số client.
 
 | Tên | Bắt buộc | Dùng để làm gì |
 |---|---|---|
-| `ANDROID_DEBUG_KEYSTORE_B64` | **Có** — workflow chặn job phát hành nếu thiếu | Khoá ký cố định. Không có nó thì bản mới không cài đè được lên bản cũ |
+| `ANDROID_DEBUG_KEYSTORE_B64` | **Có** — workflow chặn job phát hành nếu thiếu | Khoá ký, dạng base64 của tệp `.keystore` |
+| `ANDROID_KEYSTORE_PASSWORD` | **Có** với khoá riêng | Mật khẩu kho khoá. Không đặt thì workflow dùng `android` (quy ước khoá debug) |
+| `ANDROID_KEY_ALIAS` | **Có** với khoá riêng | Alias của khoá. Không đặt thì dùng `androiddebugkey` |
+| `ANDROID_KEY_PASSWORD` | Tuỳ | Mật khẩu khoá riêng lẻ. Không đặt thì dùng lại `ANDROID_KEYSTORE_PASSWORD` |
 | `EXPO_PUBLIC_TURSO_DATABASE_URL` | Không | Xem 1.5 — hiện không có tác dụng |
 | `EXPO_PUBLIC_TURSO_AUTH_TOKEN` | Không | Xem 1.5 — hiện không có tác dụng |
+
+Ba secret mật khẩu/alias được truyền vào bước ký qua **biến môi trường**, không nội
+suy `${{ secrets }}` thẳng vào nội dung script — nội suy thẳng sẽ đặt mật khẩu vào
+chính văn bản lệnh, mà GitHub in lệnh ra log.
 
 `GITHUB_TOKEN` là **sẵn có**, không phải tạo.
 
@@ -265,5 +272,5 @@ có một release mới.
 | Việc | Vì sao chưa làm |
 |---|---|
 | Đặt `ANDROID_SIGNER_SHA256` | Phải chạy workflow một lần mới có giá trị |
-| Tạo `ANDROID_DEBUG_KEYSTORE_B64` | Cần quyết định 2.4 trước: khoá template (giữ được người dùng cũ) hay khoá riêng (an toàn hơn) |
+| Dán 4 secret khoá ký lên GitHub | Khoá riêng đã sinh ở `~/min-eg-signing/`; chỉ còn bước dán vào Settings → Secrets |
 | Bỏ `armeabi-v7a` nếu build vẫn quá 90 phút | Mất hỗ trợ máy Android 32-bit cũ — là đánh đổi, không phải cải tiến |

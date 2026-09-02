@@ -388,6 +388,13 @@ jobs:
       # không đọc được, mất một đường tự kiểm.
       - name: Đặt tên file và ký đè
         id: apk
+        env:
+          # Mật khẩu và alias của khoá phát hành. Mặc định là quy ước khoá debug
+          # của Android để repo nào chưa đặt secret vẫn chạy được; Min EG dùng
+          # khoá riêng nên cả ba secret dưới đây đều phải đặt.
+          KS_PASS: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          KEY_PASS: ${{ secrets.ANDROID_KEY_PASSWORD }}
         run: |
           set -euo pipefail
           SRC=$(find android/app/build/outputs/apk/release -name '*.apk' | head -1)
@@ -396,11 +403,17 @@ jobs:
           mkdir -p dist-apk
 
           if [ -f "$RUNNER_TEMP/app.keystore" ]; then
+            # `pass:` đọc mật khẩu từ tham số dòng lệnh. Dùng biến môi trường
+            # thay vì nội suy ${{ secrets }} trực tiếp vào script: nội suy thẳng
+            # sẽ đặt mật khẩu vào chính văn bản lệnh, mà GitHub in lệnh ra log.
             "$APKSIGNER" sign \
-              --ks "$RUNNER_TEMP/app.keystore" --ks-pass pass:android \
-              --ks-key-alias androiddebugkey --key-pass pass:android \
+              --ks "$RUNNER_TEMP/app.keystore" \
+              --ks-pass "pass:${KS_PASS:-android}" \
+              --ks-key-alias "${KEY_ALIAS:-androiddebugkey}" \
+              --key-pass "pass:${KEY_PASS:-${KS_PASS:-android}}" \
               --v1-signing-enabled true --v2-signing-enabled true \
               --out dist-apk/min-eg-app.apk "$SRC"
+            echo "✅ Đã ký đè bằng khoá riêng (alias ${KEY_ALIAS:-androiddebugkey})"
           else
             cp "$SRC" dist-apk/min-eg-app.apk
           fi
