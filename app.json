@@ -1,8 +1,9 @@
 {
   "expo": {
-    "name": "Min Education Gamification",
-    "slug": "lop3-study-game",
-    "version": "1.0.6",
+    "name": "Min EG",
+    "displayName": "Min EG",
+    "slug": "min-eg",
+    "version": "1.0.7",
     "orientation": "default",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "light",

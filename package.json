@@ -1,6 +1,6 @@
 {
   "name": "min-eg",
-  "version": "1.0.6",
+  "version": "1.0.7",
   "main": "index.ts",
   "dependencies": {
     "@expo/vector-icons": "^15.0.2",
@@ -44,6 +44,6 @@
   "engines": {
     "node": ">=20.0.0"
   },
-  "displayName": "Min Education Gamification",
+  "displayName": "Min EG",
   "description": "Min EG — Min Education Gamification: học tập & góc game cho học sinh Lớp 3"
 }

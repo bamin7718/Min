@@ -48,3 +48,7 @@ yarn-error.*
 # Thư mục xuất bundle cho bản cập nhật ngầm (OTA) — do CI sinh ra
 dist-ota/
 manifests/
+
+# Bản sao nội dung nhánh `ota` tải về máy để soi khi cần (~15MB bundle đã build).
+# Là kết quả build chứ không phải mã nguồn, và đã có sẵn trên nhánh `ota`.
+Min-ota/

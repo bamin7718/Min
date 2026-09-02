@@ -20,18 +20,39 @@ import { writeFileSync } from 'node:fs';
 /* Bảng màu thương hiệu                                                */
 /* ------------------------------------------------------------------ */
 
+/**
+ * Bảng màu PHẢI khớp với `BRAND` trong `components/AppIcon.tsx`. Hai nơi vì hai
+ * bộ vẽ khác nhau (View của React Native ở app, khung RGBA tự dựng ở đây), nhưng
+ * cùng một mô tả hình học — đổi một bên mà quên bên kia thì logo trong app và
+ * icon ngoài màn hình chính sẽ lệch nhau.
+ */
 const BRAND = {
   bgTop: [37, 99, 235], // #2563EB xanh thương hiệu
   bgBottom: [14, 165, 233], // #0EA5E9 xanh cyan
+
+  // Mỗi quyển sách có màu mặt và màu tối hơn cho gáy sách + bề dày giấy
   bookMath: [56, 189, 248], // #38BDF8 — môn Toán
+  bookMathDeep: [2, 132, 199], // #0284C7
   bookViet: [16, 185, 129], // #10B981 — môn Tiếng Việt
+  bookVietDeep: [4, 120, 87], // #047857
   bookThird: [245, 158, 11], // #F59E0B — vở nháp
+  bookThirdDeep: [180, 83, 9], // #B45309
   pageEdge: [248, 250, 252],
-  pad: [124, 58, 237], // #7C3AED tay cầm game
-  padDark: [91, 33, 182],
-  padButton: [255, 255, 255],
-  badgeBg: [255, 255, 255],
-  badgeText: [29, 78, 216], // #1D4ED8
+
+  // Tay cầm: mặt trên, cạnh bên, khối đùn phía dưới
+  padFace: [139, 92, 246], // #8B5CF6
+  padSide: [109, 40, 217], // #6D28D9
+  padDeep: [76, 29, 149], // #4C1D95
+
+  // Nút bấm nhiều màu
+  padDpad: [255, 255, 255],
+  btnTop: [252, 211, 77], // #FCD34D
+  btnRight: [251, 113, 133], // #FB7185
+  btnBottom: [52, 211, 153], // #34D399
+  btnLeft: [255, 255, 255],
+
+  badgeBg: [251, 191, 36], // #FBBF24
+  badgeText: [30, 58, 138], // #1E3A8A
   white: [255, 255, 255],
 };
 
@@ -239,93 +260,175 @@ function drawEmblem(canvas, { inset = 0.14, withBadge = true, mono = false } = {
    * theo cạnh ảnh. Icon adaptive của Android cần lề tới 0.2 còn icon thường chỉ
    * 0.1; nếu đặt tỉ lệ theo cạnh ảnh thì ở lề rộng các hình sẽ chồng lên nhau.
    */
-  const box = {
-    x: S * inset,
-    y: S * inset,
-    size: S * (1 - inset * 2),
-  };
+  const box = { x: S * inset, y: S * inset, size: S * (1 - inset * 2) };
+  const B = box.size;
 
-  // ---- Huy hiệu "Min EG" nằm ở dải trên của vùng an toàn ----
-  //
-  // Cố ý BỎ huy hiệu ở các cỡ nhỏ (favicon 48px, icon đơn sắc): chữ ở cỡ đó
-  // thành một vệt mờ không đọc được, mà hướng dẫn của Android cũng khuyên không
-  // để chữ trong icon khởi chạy.
-  let badgeBottom = box.y;
-  if (withBadge && !mono) {
-    const textHeight = box.size * 0.16;
-    // Nét mảnh để lỗ trong chữ "n", "M", "G" không bị bít lại
-    const thickness = Math.max(2, box.size * 0.022);
-    const textWidth = drawText(canvas, 'Min EG', 0, 0, textHeight, thickness, BRAND.badgeText, {
-      measureOnly: true,
-    });
+  /*
+   * Cố ý BỎ huy hiệu ở các cỡ nhỏ (favicon 48px, icon đơn sắc): chữ ở cỡ đó
+   * thành một vệt mờ không đọc được, mà hướng dẫn của Android cũng khuyên không
+   * để chữ trong icon khởi chạy.
+   */
+  const showBadge = withBadge && !mono;
+  const badgeFont = B * 0.09;
+  // Nét mảnh để lỗ trong chữ "n", "M", "G" không bị bít lại
+  const thickness = Math.max(2, B * 0.014);
+  const badgePadX = B * 0.04;
+  const badgePadY = badgeFont * 0.45;
+  const badgeH = showBadge ? badgeFont + badgePadY * 2 : 0;
+  const badgeW = showBadge
+    ? drawText(canvas, 'Min EG', 0, 0, badgeFont, thickness, BRAND.badgeText, {
+        measureOnly: true,
+      }) +
+      badgePadX * 2
+    : 0;
 
-    const padX = box.size * 0.06;
-    const padY = box.size * 0.05;
-    const badgeW = textWidth + padX * 2;
-    const badgeH = textHeight + padY * 2;
-    const badgeX = box.x + (box.size - badgeW) / 2;
-    const badgeY = box.y;
+  /*
+   * Huy hiệu nằm ĐÈ lên góc dưới phải chứ không chiếm một dải riêng: chiếm dải
+   * riêng thì phần hình bị đẩy lên cao, để lại một khoảng trống rõ rệt giữa
+   * chồng sách và huy hiệu.
+   */
+  const rowTop = box.y;
+  const rowHeight = B * (showBadge ? 0.88 : 1);
+  const colGap = B * 0.06;
+  const colWidth = (B - colGap) / 2;
 
-    fillRoundRect(canvas, badgeX, badgeY, badgeW, badgeH, badgeH / 2, BRAND.badgeBg);
-    drawText(canvas, 'Min EG', badgeX + padX, badgeY + padY, textHeight, thickness, BRAND.badgeText);
-    badgeBottom = badgeY + badgeH;
-  }
-
-  // ---- Dải dưới: chồng sách bên trái, tay cầm game bên phải ----
-  const rowTop = badgeBottom + box.size * (withBadge && !mono ? 0.1 : 0.06);
-  const rowHeight = box.y + box.size - rowTop;
-  const colGap = box.size * 0.08;
-  const colWidth = (box.size - colGap) / 2;
-
-  // Chồng sách
-  const bookH = rowHeight * 0.26;
-  const bookGap = rowHeight * 0.09;
+  // ---- Chồng sách bên trái ----
+  const bookH = rowHeight * 0.21;
+  const bookGap = rowHeight * 0.05;
   const stackH = bookH * 3 + bookGap * 2;
-  const bookBottom = rowTop + rowHeight / 2 + stackH / 2;
-  const books = [BRAND.bookThird, BRAND.bookViet, BRAND.bookMath];
+  const stackTop = rowTop + rowHeight / 2 - stackH / 2;
+  // Từ trên xuống: Toán, Tiếng Việt, vở nháp
+  const books = [
+    { face: BRAND.bookMath, deep: BRAND.bookMathDeep },
+    { face: BRAND.bookViet, deep: BRAND.bookVietDeep },
+    { face: BRAND.bookThird, deep: BRAND.bookThirdDeep },
+  ];
 
-  books.forEach((color, index) => {
-    const y = bookBottom - index * (bookH + bookGap) - bookH;
-    // Quyển trên hơi thụt vào cho giống chồng sách thật
-    const shrink = index * colWidth * 0.06;
+  books.forEach(({ face, deep }, index) => {
+    // Quyển trên hẹp hơn cho giống chồng sách thật
+    const shrink = (2 - index) * colWidth * 0.07;
     const w = colWidth - shrink * 2;
-    fillRoundRect(canvas, box.x + shrink, y, w, bookH, bookH * 0.32, pick(color));
-    if (!mono) {
-      // Mép giấy sáng màu ở cạnh phải
-      fillRoundRect(
-        canvas,
-        box.x + shrink + w * 0.78,
-        y + bookH * 0.18,
-        w * 0.16,
-        bookH * 0.64,
-        bookH * 0.2,
-        BRAND.pageEdge,
-        0.9,
-      );
-    }
+    const x = box.x + shrink;
+    const y = stackTop + index * (bookH + bookGap);
+    const br = bookH * 0.3;
+    const spineW = w * 0.14;
+
+    fillRoundRect(canvas, x, y, w, bookH, br, pick(face));
+    if (mono) return;
+
+    /*
+     * Gáy sách chỉ được bo ở HAI GÓC TRÁI. `fillRoundRect` chỉ nhận một bán kính
+     * chung, nên vẽ rộng gấp đôi rồi tô lại nửa phải bằng màu mặt sách — nửa đó
+     * nằm hẳn trong lòng quyển sách nên tô đè là khôi phục đúng màu.
+     */
+    fillRoundRect(canvas, x, y, spineW * 2, bookH, br, deep);
+    fillRect(canvas, x + spineW, y, spineW, bookH, face);
+
+    // Bề dày giấy: dải tối ở đáy
+    fillRoundRect(
+      canvas,
+      x + spineW,
+      y + bookH * 0.74,
+      w - spineW,
+      bookH * 0.26,
+      br,
+      deep,
+      0.55,
+    );
+
+    // Mép giấy sáng màu ở cạnh phải
+    fillRoundRect(
+      canvas,
+      x + w * 0.79,
+      y + bookH * 0.18,
+      w * 0.14,
+      bookH * 0.48,
+      bookH * 0.2,
+      BRAND.pageEdge,
+      0.92,
+    );
   });
 
-  // Tay cầm game
-  const padW = colWidth * 0.94;
-  const padH = padW * 0.56;
+  // ---- Tay cầm game bên phải ----
+  const padW = colWidth * 0.98;
+  const padH = padW * 0.6;
   const padCx = box.x + colWidth + colGap + colWidth / 2;
   const padCy = rowTop + rowHeight / 2;
+  /** Độ dày khối đùn xuống dưới — thứ tạo ra cảm giác 3D */
+  const depth = padH * 0.16;
+  const gripR = padH * 0.42;
+  const gripDx = padW * 0.4;
+  const gripDy = padH * 0.14;
 
-  // Hai tay nắm tròn hai bên
-  fillCircle(canvas, padCx - padW * 0.4, padCy + padH * 0.16, padH * 0.44, pick(BRAND.padDark));
-  fillCircle(canvas, padCx + padW * 0.4, padCy + padH * 0.16, padH * 0.44, pick(BRAND.padDark));
-  fillRoundRect(canvas, padCx - padW / 2, padCy - padH / 2, padW, padH, padH * 0.42, pick(BRAND.pad));
+  // Khối đùn phía dưới (tối nhất), rồi tay nắm, rồi mặt trên
+  fillCircle(canvas, padCx - gripDx, padCy + gripDy + depth, gripR, pick(BRAND.padDeep));
+  fillCircle(canvas, padCx + gripDx, padCy + gripDy + depth, gripR, pick(BRAND.padDeep));
+  fillRoundRect(
+    canvas,
+    padCx - padW / 2,
+    padCy - padH / 2 + depth,
+    padW,
+    padH,
+    padH * 0.42,
+    pick(BRAND.padDeep),
+  );
+
+  fillCircle(canvas, padCx - gripDx, padCy + gripDy, gripR, pick(BRAND.padSide));
+  fillCircle(canvas, padCx + gripDx, padCy + gripDy, gripR, pick(BRAND.padSide));
+  fillRoundRect(
+    canvas,
+    padCx - padW / 2,
+    padCy - padH / 2,
+    padW,
+    padH,
+    padH * 0.42,
+    pick(BRAND.padFace),
+  );
 
   if (!mono) {
+    // Vệt sáng ở mép trên cho ra chất nhựa bóng
+    fillRoundRect(
+      canvas,
+      padCx - padW * 0.4,
+      padCy - padH * 0.4,
+      padW * 0.8,
+      padH * 0.2,
+      padH * 0.1,
+      BRAND.white,
+      0.22,
+    );
+
     // Nút thập bên trái
     const dpadCx = padCx - padW * 0.24;
-    const arm = padH * 0.3;
-    const thick = padH * 0.13;
-    fillRoundRect(canvas, dpadCx - thick / 2, padCy - arm, thick, arm * 2, thick / 2, BRAND.padButton);
-    fillRoundRect(canvas, dpadCx - arm, padCy - thick / 2, arm * 2, thick, thick / 2, BRAND.padButton);
-    // Hai nút bấm bên phải
-    fillCircle(canvas, padCx + padW * 0.18, padCy + padH * 0.1, padH * 0.12, BRAND.padButton);
-    fillCircle(canvas, padCx + padW * 0.32, padCy - padH * 0.14, padH * 0.12, BRAND.padButton);
+    const arm = padH * 0.28;
+    const thick = padH * 0.12;
+    fillRoundRect(canvas, dpadCx - thick / 2, padCy - arm, thick, arm * 2, thick / 2, BRAND.padDpad);
+    fillRoundRect(canvas, dpadCx - arm, padCy - thick / 2, arm * 2, thick, thick / 2, BRAND.padDpad);
+
+    // Bốn nút mặt nhiều màu, xếp thành hình thoi
+    const faceCx = padCx + padW * 0.24;
+    const faceGap = padH * 0.21;
+    const faceR = padH * 0.105;
+    fillCircle(canvas, faceCx, padCy - faceGap, faceR, BRAND.btnTop);
+    fillCircle(canvas, faceCx + faceGap, padCy, faceR, BRAND.btnRight);
+    fillCircle(canvas, faceCx, padCy + faceGap, faceR, BRAND.btnBottom);
+    fillCircle(canvas, faceCx - faceGap, padCy, faceR, BRAND.btnLeft);
+  }
+
+  // ---- Huy hiệu "Min EG" ở góc dưới phải ----
+  if (showBadge) {
+    const badgeX = box.x + B - badgeW;
+    const badgeY = box.y + B - badgeH;
+    fillRoundRect(canvas, badgeX, badgeY, badgeW, badgeH, badgeH / 2, BRAND.badgeBg);
+    drawText(
+      canvas,
+      'Min EG',
+      badgeX + badgePadX,
+      badgeY + badgePadY,
+      badgeFont,
+      thickness,
+      BRAND.badgeText,
+    );
   }
 }
 
