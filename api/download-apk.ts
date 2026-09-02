@@ -12,9 +12,18 @@
  */
 export const config = { runtime: 'edge' };
 
-/** Nguồn tải thật. Đổi nguồn thì chỉ sửa đúng hằng số này. */
+/**
+ * Nguồn tải thật. Đổi nguồn thì chỉ sửa đúng hằng số này.
+ *
+ * Tên file đổi từ `app-release.apk` sang `min-eg-app.apk` ở bản 1.0.8, phải khớp
+ * với `files:` trong `.github/workflows/build-apk.yml` — lệch là nút tải trong
+ * app trả 404 mà KHÔNG có gì báo.
+ *
+ * Các release cũ (v1.0.1) vẫn mang tên file cũ, nên link này chỉ hoạt động sau
+ * khi có một release mới dùng tên mới.
+ */
 const LATEST_APK_URL =
-  'https://github.com/bamin7718/Min/releases/latest/download/app-release.apk';
+  'https://github.com/bamin7718/Min/releases/latest/download/min-eg-app.apk';
 
 export default function handler(): Response {
   return new Response(null, {

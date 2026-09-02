@@ -15,7 +15,13 @@ const REPO = 'bamin7718/Min';
 const RELEASES_API = `https://api.github.com/repos/${REPO}/releases/latest`;
 /** Link tải cố định — đi qua /api/download-apk để sau này đổi nguồn được */
 const DOWNLOAD_URL = 'https://min-silk-iota.vercel.app/api/download-apk';
-const APK_NAME = 'app-release.apk';
+/**
+ * Tên file APK trong release, phải khớp `files:` của workflow build-apk.
+ *
+ * Release cũ (v1.0.1) mang tên `app-release.apk`; hàm tìm asset bên dưới có
+ * nhánh dự phòng "lấy file .apk đầu tiên" nên các bản cũ vẫn đọc được.
+ */
+const APK_NAME = 'min-eg-app.apk';
 const TIMEOUT_MS = 8_000;
 
 function json(body: unknown, status = 200): Response {

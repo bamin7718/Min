@@ -1,0 +1,497 @@
+name: Build APK và Release
+
+# Quy trình CI/CD của Min EG, dựng theo công thức trong `BUILD-APK.md` (rút ra từ
+# dự án SoFin) và đã đối chiếu từng con số cho đúng React Native / Expo.
+# Báo cáo rà soát và danh sách secrets: xem `DEVOPS_CHECKLIST.md`.
+#
+# Hai chế độ, cố ý tách:
+#
+#   | Trigger       | Làm gì                        | Vì sao                                |
+#   |---------------|-------------------------------|---------------------------------------|
+#   | push `main`   | Build, chỉ để lại artifact    | Biết ngay native còn dựng được, mà    |
+#   |               |                               | không tạo release rác mỗi commit      |
+#   | push tag `v*` | Build **và** phát hành        | Chỉ mốc bạn chủ động chọn mới thành   |
+#   |               |                               | bản người dùng tải về                 |
+#
+# `paths-ignore` chỉ áp cho push nhánh, KHÔNG áp cho push tag (theo tài liệu
+# GitHub) — nên sửa tệp .md không còn tốn một lượt build cả tiếng.
+
+on:
+  push:
+    branches: [main]
+    paths-ignore: ['**.md']
+    tags: ['v*']
+  workflow_dispatch:
+
+# Cần quyền ghi để tạo Release và tải APK lên
+permissions:
+  contents: write
+
+# PHẢI có `github.ref` trong group. (BUILD-APK.md §5.4)
+#
+# `git push origin main v1.0.8` đẩy nhánh và tag cùng lúc → hai run song song.
+# Dùng một group chung thì `cancel-in-progress` khiến run sau giết run trước, và
+# có lần cái bị giết chính là run của tag — tag lên remote mà không có release
+# nào, không một dòng báo lỗi.
+concurrency:
+  group: apk-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # ==================================================================
+  # 1. Phát hành bản CẬP NHẬT NGẦM (OTA)
+  #
+  # Chỉ đóng gói phần JavaScript và hình ảnh rồi đẩy lên nhánh `ota`. Máy đã cài
+  # app tự tải phần này về mà KHÔNG phải cài lại APK.
+  #
+  # Job nhẹ (~2 phút, không cần Android SDK) nên chạy song song với job build APK.
+  # ==================================================================
+  publish-ota:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    env:
+      EXPO_PUBLIC_PROGRESS_API_URL: https://min-hocchoi.vercel.app
+      EXPO_PUBLIC_APK_DOWNLOAD_URL: https://min-silk-iota.vercel.app/api/download-apk
+
+    steps:
+      - name: Lấy code
+        uses: actions/checkout@v4
+
+      - name: Cài Node 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Cài dependency
+        run: npm ci
+
+      # runtimeVersion theo chính sách fingerprint: Expo băm toàn bộ phần native
+      # (danh sách thư viện, cấu hình). Sửa JavaScript thì chuỗi này KHÔNG đổi nên
+      # bản OTA vẫn hợp với APK đang cài; thêm thư viện native thì nó đổi và máy
+      # cũ tự động không nhận bản OTA không hợp — thay vì nhận rồi crash.
+      - name: Lấy runtimeVersion
+        id: rv
+        run: |
+          set -euo pipefail
+          RV=$(npx expo-updates runtimeversion:resolve --platform android \
+            | node -e "let s='';process.stdin.on('data',d=>s+=d).on('end',()=>console.log(JSON.parse(s).runtimeVersion))")
+          echo "value=${RV}" >> "$GITHUB_OUTPUT"
+          echo "runtimeVersion: ${RV}"
+
+      - name: Đóng gói JavaScript cho Android
+        run: npx expo export --platform android --output-dir dist-ota
+
+      # CỔNG CHẶN RÒ RỈ TURSO.
+      #
+      # Hôm nay bước này luôn xanh, và đó là điều đúng: `EXPO_PUBLIC_TURSO_*` chỉ
+      # được đọc trong `lib/turso.ts`, mà file đó chỉ được `api/*` (Vercel
+      # functions) import — app KHÔNG import. Metro chỉ nhúng `process.env.
+      # EXPO_PUBLIC_*` vào những chỗ có trong bundle, nên token không vào APK.
+      #
+      # Giữ bước này làm dây bẫy cho ngày ai đó import `lib/turso.ts` vào mã app.
+      # Lúc đó Metro sẽ nhúng token thật vào bundle, và vì token Turso có toàn
+      # quyền đọc/ghi/xoá mà libSQL KHÔNG có Row Level Security, bất kỳ ai giải
+      # nén APK cũng đọc được cả bảng `users` kèm `password_hash`. Bước này bắt
+      # được trước khi bản build ra tới người dùng.
+      - name: Chặn rò rỉ thông tin Turso vào bundle
+        run: |
+          set -euo pipefail
+          if grep -rqE "libsql://|TURSO_AUTH_TOKEN" dist-ota/; then
+            echo "::error::Bundle chứa dấu vết kết nối Turso trực tiếp."
+            echo "App phải đi qua /api/auth và /api/progress. Xem lib/turso.ts và DEVOPS_CHECKLIST.md."
+            grep -rlE "libsql://|TURSO_AUTH_TOKEN" dist-ota/ | head
+            exit 1
+          fi
+          echo "✅ Bundle không chứa thông tin kết nối Turso."
+
+      - name: Sinh manifest theo giao thức Expo Updates
+        run: |
+          set -euo pipefail
+          node scripts/build-ota-manifest.mjs \
+            --export-dir dist-ota \
+            --platform android \
+            --runtime-version "${{ steps.rv.outputs.value }}" \
+            --base-url https://min-silk-iota.vercel.app \
+            --out "manifests/manifest-android-${{ steps.rv.outputs.value }}.json"
+
+      # Nhánh `ota` là nhánh rời (orphan), không dính vào lịch sử của main — nhờ
+      # vậy main không phình vì mấy megabyte bundle mỗi lần phát hành.
+      - name: Đẩy bundle và manifest lên nhánh ota
+        run: |
+          set -euo pipefail
+          RV="${{ steps.rv.outputs.value }}"
+
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          rm -rf /tmp/ota && mkdir -p "/tmp/ota/${RV}" /tmp/ota/manifests
+          cp -r dist-ota/. "/tmp/ota/${RV}/"
+          cp -r manifests/. /tmp/ota/manifests/
+
+          # Giữ lại các bản OTA cũ của những runtimeVersion khác: máy chưa kịp
+          # cập nhật APK vẫn phải tải được bản hợp với nó.
+          if git fetch origin ota --depth 1 2>/dev/null; then
+            # --detach: origin/ota là ref từ xa, không có --detach thì git đòi tạo nhánh cục bộ
+            git worktree add --detach /tmp/ota-old origin/ota
+            for dir in /tmp/ota-old/*/ ; do
+              name=$(basename "$dir")
+              [ "$name" = "manifests" ] && continue
+              [ "$name" = "$RV" ] && continue
+              cp -r "$dir" "/tmp/ota/${name}"
+            done
+            for f in /tmp/ota-old/manifests/*.json; do
+              [ -e "$f" ] || continue
+              base=$(basename "$f")
+              [ -e "/tmp/ota/manifests/$base" ] || cp "$f" "/tmp/ota/manifests/$base"
+            done
+            git worktree remove /tmp/ota-old --force
+          else
+            echo "Chưa có nhánh ota — đây là lần phát hành đầu tiên"
+          fi
+
+          git checkout --orphan ota-tmp
+          git rm -rq --cached . || true
+          find . -maxdepth 1 -mindepth 1 ! -name '.git' -exec rm -rf {} +
+          cp -r /tmp/ota/. .
+
+          git add -A
+          git commit -m "OTA cho runtimeVersion ${RV} (commit ${GITHUB_SHA::7})"
+          git push --force origin ota-tmp:ota
+
+          echo "✅ Đã đẩy bản OTA cho runtimeVersion ${RV}"
+
+      - name: Tải manifest lên artifact để soi khi cần
+        uses: actions/upload-artifact@v4
+        with:
+          name: ota-manifest
+          path: manifests/*.json
+          if-no-files-found: error
+          retention-days: 30
+
+  # ==================================================================
+  # 2. Build APK và (chỉ khi push tag) phát hành Release
+  # ==================================================================
+  build-apk:
+    runs-on: ubuntu-latest
+    # 90 phút, KHÔNG phải 45.
+    #
+    # Mốc 45 phút cũ tạo ra một vòng tự khoá: cache Gradle chỉ được ghi ở post-job
+    # step, mà job bị timeout thì post-job step không chạy — nên cache chưa bao
+    # giờ được lưu, mỗi lượt đều biên dịch nguội rồi lại vượt 45 phút. GitHub ghi
+    # timeout thành "cancelled" nên rất dễ tưởng bị huỷ do concurrency.
+    timeout-minutes: 90
+
+    env:
+      # Metro nhúng biến EXPO_PUBLIC_* vào bundle NGAY LÚC BUILD, và `.env` không
+      # được commit. Không khai ở đây thì APK ra lò không có URL máy chủ nào và
+      # buộc phải chạy Local Mode. Hai biến này KHÔNG phải bí mật.
+      EXPO_PUBLIC_PROGRESS_API_URL: https://min-hocchoi.vercel.app
+      EXPO_PUBLIC_APK_DOWNLOAD_URL: https://min-silk-iota.vercel.app/api/download-apk
+
+    steps:
+      - name: Lấy code
+        uses: actions/checkout@v4
+
+      # ---------------- Cổng kiểm tra an toàn ----------------
+
+      # Chặn TRƯỚC khi tốn cả tiếng build. (BUILD-APK.md §5.6)
+      #
+      # App tự kiểm cập nhật bằng cách so `constants/version.ts` với phiên bản mà
+      # máy chủ báo về, và phiên bản đó lấy từ tên tag. Tag lệch package.json là
+      # người dùng vừa cập nhật xong đã bị nhắc cập nhật lại — một vòng lặp.
+      - name: Đối chiếu tag với package.json
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          set -euo pipefail
+          PKG=$(node -p "require('./package.json').version")
+          TAG="${GITHUB_REF_NAME#v}"
+          echo "package.json=$PKG | tag=$GITHUB_REF_NAME"
+          if [ "$PKG" != "$TAG" ]; then
+            echo "::error::Tag $GITHUB_REF_NAME không khớp version trong package.json ($PKG)."
+            exit 1
+          fi
+
+      # Ba tệp phải cùng một số. `.githooks/pre-commit` giữ chúng đồng bộ, nhưng
+      # hook chỉ chạy trên máy đã bật `core.hooksPath` nên vẫn phải kiểm ở CI.
+      - name: Đối chiếu package.json - app.json - constants/version.ts
+        run: |
+          set -euo pipefail
+          PKG=$(node -p "require('./package.json').version")
+          APP=$(node -p "require('./app.json').expo.version")
+          SRC=$(sed -n "s/.*APP_VERSION *= *'\([^']*\)'.*/\1/p" constants/version.ts)
+          echo "package.json=$PKG | app.json=$APP | constants/version.ts=$SRC"
+          if [ "$PKG" != "$APP" ] || [ "$PKG" != "$SRC" ]; then
+            echo "::error::Ba chỗ khai phiên bản không khớp nhau."
+            exit 1
+          fi
+
+      # Phát hành mà thiếu khoá ký là bản đó KHÔNG cài đè được lên bản cũ. Chặn
+      # ngay đầu job thay vì để phát hiện sau khi đã build xong. (BUILD-APK.md §3.1)
+      - name: Bắt buộc có khoá ký khi phát hành
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          KS: ${{ secrets.ANDROID_DEBUG_KEYSTORE_B64 }}
+        run: |
+          if [ -z "$KS" ]; then
+            echo "::error::Thiếu secret ANDROID_DEBUG_KEYSTORE_B64 — bản phát hành này sẽ không cài đè được."
+            echo "Xem DEVOPS_CHECKLIST.md để tạo khoá."
+            exit 1
+          fi
+          echo "✅ Đã có khoá ký."
+
+      # ---------------- Môi trường ----------------
+
+      - name: Cài Node 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      # JDK 21 theo môi trường SoFin.
+      #
+      # Đây là JDK chạy Gradle, không phải mức bytecode đầu ra: RN 0.86 ghim
+      # `agp = "8.12.0"` (`react-native/gradle/libs.versions.toml`) và
+      # `ReactAndroid/build.gradle.kts` đặt `JavaVersion.VERSION_17`, nên bytecode
+      # vẫn ra chuẩn 17 còn AGP 8.12 chạy được trên JDK 17-21.
+      #
+      # NẾU Gradle đỏ ở đây, triệu chứng sẽ là log nói về `sourceCompatibility`,
+      # `jvmTarget` hoặc "class file version" — sửa đúng một dòng dưới thành 17.
+      - name: Cài JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+
+      - name: Thiết lập Android SDK
+        uses: android-actions/setup-android@v3
+
+      # setup-gradle lo cache Gradle: đọc cache lúc bắt đầu, ghi lúc kết thúc, và
+      # tự tách theo nhánh nên nhánh phụ không ghi đè cache của main.
+      - name: Thiết lập Gradle + cache
+        uses: gradle/actions/setup-gradle@v3
+
+      - name: Cài dependency
+        run: npm ci
+
+      # Không có `npm test` trong dự án; cổng chặn tương đương là typecheck.
+      - name: Kiểm tra TypeScript
+        run: npx tsc --noEmit
+
+      # ---------------- Cấu hình Turso & prebuild ----------------
+
+      # Sinh .env cho bản build.
+      #
+      # Hai biến TURSO là **tuỳ chọn**: hôm nay không mã nào trong bundle app đọc
+      # chúng (chỉ `lib/turso.ts` đọc, mà file đó chỉ chạy ở Vercel), nên chưa đặt
+      # secret thì build vẫn ra APK đầy đủ và app đi qua `/api/*` như thiết kế.
+      # Đặt secret thì giá trị nằm trong `.env` của runner và bị xoá cùng runner.
+      #
+      # Cổng chặn ở job `publish-ota` canh đúng chỗ: nếu mai này có mã app đọc hai
+      # biến này thì token sẽ vào bundle và bước đó đỏ.
+      - name: Sinh .env (Turso + địa chỉ công khai)
+        env:
+          TURSO_URL: ${{ secrets.EXPO_PUBLIC_TURSO_DATABASE_URL }}
+          TURSO_TOKEN: ${{ secrets.EXPO_PUBLIC_TURSO_AUTH_TOKEN }}
+        run: |
+          set -euo pipefail
+          {
+            echo "EXPO_PUBLIC_PROGRESS_API_URL=${EXPO_PUBLIC_PROGRESS_API_URL}"
+            echo "EXPO_PUBLIC_APK_DOWNLOAD_URL=${EXPO_PUBLIC_APK_DOWNLOAD_URL}"
+            if [ -n "${TURSO_URL}" ]; then
+              echo "EXPO_PUBLIC_TURSO_DATABASE_URL=${TURSO_URL}"
+            fi
+            if [ -n "${TURSO_TOKEN}" ]; then
+              echo "EXPO_PUBLIC_TURSO_AUTH_TOKEN=${TURSO_TOKEN}"
+            fi
+          } > .env
+          # In tên biến, KHÔNG in giá trị — token không được lọt vào log
+          echo "Đã sinh .env với các biến:"
+          sed 's/=.*/=<đã đặt>/' .env
+
+      # Sinh thư mục android/ từ app.json. Thư mục này KHÔNG commit vào repo nên
+      # mỗi lần build đều dựng lại từ config — không bị lệch cấu hình.
+      #
+      # Dùng expo prebuild + gradle chứ không dùng EAS: `eas build` cần tài khoản
+      # Expo và secret EXPO_TOKEN, còn `eas build --local` vẫn chạy đúng gradle
+      # như dưới đây cộng thêm một lớp thiết lập nữa.
+      - name: Sinh project Android (expo prebuild)
+        run: npx expo prebuild --platform android --no-install
+
+      # Chống hết bộ nhớ giữa lúc biên dịch.
+      #
+      # Mặc định Gradle chỉ lấy 512m-2g heap; runner GitHub có 16GB nhưng Gradle
+      # không tự dùng. Hết heap thì biểu hiện là build chậm dần rồi treo tới
+      # timeout, chứ không báo OutOfMemoryError rõ ràng — nên bật
+      # HeapDumpOnOutOfMemoryError để lần sau còn biết đường tìm.
+      - name: Tăng bộ nhớ và bật build song song cho Gradle
+        run: |
+          set -euo pipefail
+          {
+            echo ""
+            echo "# --- do .github/workflows/build-apk.yml thêm vào ---"
+            echo "org.gradle.jvmargs=-Xmx6g -XX:MaxMetaspaceSize=1g -XX:+HeapDumpOnOutOfMemoryError -Dfile.encoding=UTF-8"
+            echo "org.gradle.parallel=true"
+            echo "org.gradle.caching=true"
+          } >> android/gradle.properties
+          tail -8 android/gradle.properties
+
+      # ---------------- Build ----------------
+
+      # `assembleRelease`, KHÔNG phải `assembleDebug`.
+      #
+      # Đây là chỗ công thức SoFin không port sang được. Với Capacitor, asset web
+      # được copy vào mọi biến thể nên `assembleDebug` cho ra app chạy được. Với
+      # React Native thì không: chính comment trong template Expo nói rõ về
+      # `debuggableVariants` — "For those we're going to skip the bundling of the
+      # JS bundle and the assets. By default is just 'debug'." Tức APK debug KHÔNG
+      # chứa JS, mở lên là màn hình đỏ đòi Metro dev server.
+      #
+      # Thêm nữa, APK debug mang `android:debuggable=true`, nghĩa là ai cắm adb
+      # cũng đọc được AsyncStorage của app — tài khoản Local Mode, tiến độ, hash
+      # mã PIN. Không phù hợp cho bản phát hành.
+      #
+      # Chỉ build cho CPU ARM (điện thoại/tablet thật) để nhẹ và nhanh hơn.
+      - name: Build APK release
+        run: |
+          set -euo pipefail
+          chmod +x android/gradlew
+          cd android
+          ./gradlew assembleRelease --no-daemon --stacktrace \
+            -PreactNativeArchitectures=arm64-v8a,armeabi-v7a
+
+      # ---------------- Ký và xác minh chữ ký ----------------
+
+      # Nạp khoá ký cố định.
+      #
+      # Template Expo có kèm `android/app/debug.keystore` nên Gradle đã ký sẵn
+      # bằng khoá đó — khác Capacitor (BUILD-APK.md §5.3), nơi Gradle tự sinh khoá
+      # ngẫu nhiên mỗi lần. Nhưng vẫn ký đè bằng khoá của chính bạn, vì khoá trong
+      # template là **công khai** (nằm trong gói npm, ai cũng tải được) nên bất kỳ
+      # ai cũng ký được một APK giả mạo cùng package `com.bamin7718.lop3studygame`.
+      - name: Nạp khoá ký
+        env:
+          KS: ${{ secrets.ANDROID_DEBUG_KEYSTORE_B64 }}
+        run: |
+          set -euo pipefail
+          if [ -z "$KS" ]; then
+            echo "::warning::Không có ANDROID_DEBUG_KEYSTORE_B64 — artifact này giữ chữ ký của khoá công khai trong template Expo."
+            exit 0
+          fi
+          echo "$KS" | base64 -d > "$RUNNER_TEMP/app.keystore"
+          ls -l "$RUNNER_TEMP/app.keystore"
+
+      # Ký ĐÈ sau khi build, không phụ thuộc biến môi trường nào của Gradle.
+      #
+      # Bật cả v1 và v2: chỉ có v2 thì `keytool -printcert -jarfile` ngoài máy
+      # không đọc được, mất một đường tự kiểm.
+      - name: Đặt tên file và ký đè
+        id: apk
+        run: |
+          set -euo pipefail
+          SRC=$(find android/app/build/outputs/apk/release -name '*.apk' | head -1)
+          echo "APK gốc: $SRC"
+          APKSIGNER=$(ls "$ANDROID_HOME"/build-tools/*/apksigner | sort -V | tail -1)
+          mkdir -p dist-apk
+
+          if [ -f "$RUNNER_TEMP/app.keystore" ]; then
+            "$APKSIGNER" sign \
+              --ks "$RUNNER_TEMP/app.keystore" --ks-pass pass:android \
+              --ks-key-alias androiddebugkey --key-pass pass:android \
+              --v1-signing-enabled true --v2-signing-enabled true \
+              --out dist-apk/min-eg-app.apk "$SRC"
+          else
+            cp "$SRC" dist-apk/min-eg-app.apk
+          fi
+
+          ls -lh dist-apk/min-eg-app.apk
+          echo "path=dist-apk/min-eg-app.apk" >> "$GITHUB_OUTPUT"
+
+      # CỔNG CHẶN CHỮ KÝ — bước quan trọng nhất. (BUILD-APK.md §5.5)
+      #
+      # Nạp được file khoá KHÔNG có nghĩa là nó đã được dùng. Hỏng ở đây không có
+      # triệu chứng gì lúc build: APK vẫn cài được, vẫn chạy. Chỉ là vài tuần sau
+      # người dùng không nâng cấp được (`INSTALL_FAILED_UPDATE_INCOMPATIBLE`) và
+      # phải GỠ app — mà gỡ app là xoá sạch AsyncStorage: tài khoản Local Mode,
+      # tiến độ học, mã PIN.
+      #
+      # Vân tay chứng chỉ KHÔNG phải bí mật (nó nằm trong mọi APK đã phát hành)
+      # nên đặt ở repository **variable**, không phải secret — nhét vào secret thì
+      # log bị che và bước này mất hết tác dụng chẩn đoán.
+      #
+      # Lần chạy đầu chưa có biến thì bước này chỉ IN vân tay và cảnh báo.
+      - name: Đối chiếu chữ ký APK
+        env:
+          WANT: ${{ vars.ANDROID_SIGNER_SHA256 }}
+        run: |
+          set -euo pipefail
+          APKSIGNER=$(ls "$ANDROID_HOME"/build-tools/*/apksigner | sort -V | tail -1)
+          AAPT2=$(ls "$ANDROID_HOME"/build-tools/*/aapt2 | sort -V | tail -1)
+
+          # `| tee` in nguyên văn ra log: có lần bước này đỏ vì lệnh bóc chuỗi sai
+          # chứ không phải chữ ký sai, mà log không có gì để đối chiếu.
+          "$APKSIGNER" verify --print-certs dist-apk/min-eg-app.apk | tee /tmp/certs.txt
+          "$AAPT2" dump badging dist-apk/min-eg-app.apk \
+            | grep -E "^package|application-label|sdkVersion|native-code" || true
+
+          # sed bám vào chính chuỗi 64 ký tự hex, không bám vào tên nhãn hay vị
+          # trí dấu hai chấm: định dạng output của apksigner đổi theo build-tools.
+          GOT=$(sed -n 's/.*SHA-256 digest:[[:space:]]*\([0-9a-fA-F]\{64\}\).*/\1/p' /tmp/certs.txt \
+                | head -1 | tr 'A-F' 'a-f')
+          echo "signer=$GOT"
+
+          if [ -z "$GOT" ]; then
+            echo "::error::Không đọc được vân tay chữ ký — xem log apksigner ở trên."
+            exit 1
+          fi
+          if [ -z "$WANT" ]; then
+            echo "::warning::Chưa đặt variable ANDROID_SIGNER_SHA256. Đặt nó bằng $GOT để bật cổng chặn."
+            exit 0
+          fi
+          if [ "$GOT" != "$WANT" ]; then
+            echo "::error::APK ký bằng khoá LẠ. Mong đợi $WANT, thực tế $GOT."
+            echo "Phát hành bản này sẽ khiến người dùng không cài đè được và phải gỡ app (mất hết dữ liệu cục bộ)."
+            exit 1
+          fi
+          echo "✅ Chữ ký khớp khoá đã biết."
+
+      # ---------------- Artifact & Release ----------------
+
+      # Giữ artifact để tải được ngay từ tab Actions kể cả khi không phát hành
+      - name: Tải APK lên artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: min-eg-apk
+          path: ${{ steps.apk.outputs.path }}
+          if-no-files-found: error
+          retention-days: 30
+
+      # prerelease: false + không phải draft ⇒ GitHub tự trỏ nhãn "latest" vào
+      # release này, nên /releases/latest/download/min-eg-app.apk luôn là bản mới.
+      #
+      # Tên file PHẢI khớp `api/download-apk.ts` và `api/check-version.ts` —
+      # lệch là nút tải trong app trả 404 mà không có gì báo. (BUILD-APK.md §5.8)
+      - name: Tạo GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: Min EG ${{ github.ref_name }}
+          files: ${{ steps.apk.outputs.path }}
+          draft: false
+          prerelease: false
+          make_latest: 'true'
+          body: |
+            ## Bản ${{ github.ref_name }}
+
+            Tải file **min-eg-app.apk** ở dưới, hoặc mở link tải cố định:
+            <https://min-silk-iota.vercel.app/api/download-apk>
+
+            - Commit: ${{ github.sha }}
+            - Build: lượt #${{ github.run_number }}
+            - APK đã ký, hỗ trợ arm64-v8a và armeabi-v7a
+
+            Trong app, vào **Cài đặt → Kiểm tra bản cập nhật** để tải bản này.
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

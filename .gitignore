@@ -13,6 +13,10 @@ expo-env.d.ts
 .kotlin/
 *.orig.*
 *.jks
+# *.keystore: tên file mà quy trình ký APK sinh ra (app-debug.keystore).
+# Thiếu dòng này thì `git add -A` sẽ commit thẳng khoá ký vào repo — mà khoá ký
+# là thứ quyết định người dùng có cài đè bản mới được hay không.
+*.keystore
 *.p8
 *.p12
 *.key
