@@ -18,6 +18,7 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import AvatarPicker from '../components/AvatarPicker';
+import BrandFooter from '../components/BrandFooter';
 import GradePicker, { gradeLabel } from '../components/GradePicker';
 import {
   TAB_BAR_SPACE,
@@ -28,7 +29,6 @@ import {
   touch,
 } from '../constants/theme';
 import { APP_VERSION } from '../constants/version';
-import { BRAND_FOOTER } from '../constants/brand';
 import { useAuth } from '../context/AuthContext';
 import { usePlaytime } from '../context/PlaytimeContext';
 import { isApiConfigured } from '../lib/authApi';
@@ -125,7 +125,7 @@ export default function SettingsScreen({
         <UpdateSection onSignedOut={onClose} />
         <SignOutSection onClose={onClose} />
 
-        <Text style={styles.footerVersion}>{BRAND_FOOTER}</Text>
+        <BrandFooter />
       </ScrollView>
     </KeyboardAvoidingView>
   );
@@ -1456,11 +1456,5 @@ const styles = StyleSheet.create({
   secondaryText: { color: colors.primary, fontSize: 14, fontWeight: '800' },
 
   hint: { fontSize: 12, color: colors.textMuted, lineHeight: 18, marginTop: spacing.xs },
-  footerVersion: {
-    fontSize: 12,
-    color: colors.textMuted,
-    textAlign: 'center',
-    marginTop: spacing.sm,
-  },
   pressed: { opacity: 0.78 },
 });

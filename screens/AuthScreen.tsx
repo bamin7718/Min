@@ -15,8 +15,9 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { colors, radius, spacing, touch } from '../constants/theme';
-import { BRAND_FOOTER, BRAND_SHORT, BRAND_TAGLINE } from '../constants/brand';
+import { BRAND_SHORT, BRAND_TAGLINE } from '../constants/brand';
 import AppIcon from '../components/AppIcon';
+import BrandFooter from '../components/BrandFooter';
 import GradePicker, { gradeLabel } from '../components/GradePicker';
 import { useAuth } from '../context/AuthContext';
 import { DEFAULT_GRADE } from '../types';
@@ -276,7 +277,7 @@ export default function AuthScreen() {
           </Text>
         </View>
 
-        <Text style={styles.versionLabel}>{BRAND_FOOTER}</Text>
+        <BrandFooter />
       </ScrollView>
 
       <GradePicker
@@ -384,11 +385,5 @@ const styles = StyleSheet.create({
   buttonDisabled: { opacity: 0.6 },
 
   hint: { fontSize: 12, color: colors.textMuted, lineHeight: 18, marginTop: spacing.xs },
-  versionLabel: {
-    fontSize: 12,
-    color: colors.textMuted,
-    textAlign: 'center',
-    marginTop: spacing.sm,
-  },
   pressed: { opacity: 0.78 },
 });
