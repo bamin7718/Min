@@ -133,10 +133,32 @@ export interface KeeperDive {
   pose: KeeperPose;
 }
 
-/** Tầm với của thủ môn theo phương ngang, tính theo đơn vị aimX */
-export const KEEPER_REACH_X = 0.58;
+/**
+ * Tầm với của thủ môn MÁY theo phương ngang, tính theo đơn vị aimX.
+ *
+ * Hạ từ 0.58 xuống 0.45 (và dọc từ 0.52 xuống 0.40) cùng lúc với việc thu nhỏ
+ * hình thủ môn từ 78% xuống 60% chiều cao khung thành. Hai con số này PHẢI đi
+ * cùng nhau: thu nhỏ hình mà giữ nguyên tầm với thì đồ hoạ nói dối — bé nhìn
+ * thấy góc trống, sút vào đó, vẫn bị một thủ môn "tay dài vô hình" cản.
+ *
+ * Hệ quả về độ khó: các góc cao và góc xa giờ thực sự là góc chết, nên sút chuẩn
+ * vào góc gần như luôn thành bàn. Đó là chủ ý — trò này để bé thấy mình giỏi lên
+ * khi ngắm chính xác, không phải để cân bằng như game đối kháng.
+ *
+ * Tỉ lệ GHI BÀN đo thật (6000 lượt mỗi điểm, `keeperDecide` với skill 0.45):
+ *
+ *     góc trên trái  (-0.90, 0.85)   98.5%      giữa cao   (0.00, 0.85)   86.4%
+ *     góc trên phải  (+0.90, 0.85)   98.0%      giữa vừa   (0.00, 0.45)    9.1%
+ *     góc dưới trái  (-0.90, 0.12)   88.2%      giữa thấp  (0.00, 0.15)    6.3%
+ *     góc dưới phải  (+0.90, 0.12)   87.4%
+ *     nửa cao trái   (-0.55, 0.70)   75.8%      góc + xoáy mạnh          100.0%
+ *
+ * Đổi bất kỳ con số nào ở đây hay trong `keeperDecide` thì đo lại bảng này —
+ * chính bảng này đã phát hiện ra lỗi kẹp phán đoán mô tả bên dưới.
+ */
+export const KEEPER_REACH_X = 0.45;
 /** Tầm với theo phương dọc, tính theo đơn vị aimY */
-export const KEEPER_REACH_Y = 0.52;
+export const KEEPER_REACH_Y = 0.4;
 
 /**
  * Thủ môn phán đoán hướng sút.
@@ -150,18 +172,38 @@ export function keeperDecide(
   skill: number,
   random: () => number,
 ): KeeperDive {
-  const error = (1 - clamp(skill, 0, 1)) * 1.6;
-  const guessX = shot.aimX + (random() * 2 - 1) * error;
-  const guessY = shot.aimY + (random() * 2 - 1) * error * 0.55;
+  const s = clamp(skill, 0, 1);
 
   /*
-   * Thủ môn bay tới ĐÚNG chỗ mình đoán, không phải chọn một trong ba vị trí cố
-   * định. Bản đầu dùng ba vị trí (-0.75, 0, +0.75) và hoá ra sút vào GÓC lại dễ
-   * bị cản hơn sút gần giữa — vì góc trùng đúng chỗ thủ môn hay bay tới. Cho bay
-   * liên tục thì sút chuẩn vào góc mới thực sự được thưởng.
+   * Phán đoán = TRỘN giữa hai thứ: chỗ thủ môn có thói quen đổ tới (gần giữa,
+   * thấp) và chỗ quả sút thật sự đi. `skill` là tỉ lệ đọc được quả sút thật.
+   *
+   * Bản trước cộng nhiễu quanh chính quả sút rồi KẸP ở ±0.92, và cách đó tạo ra
+   * đúng cái lỗi mà comment cũ tưởng đã sửa: khi quả sút ở sát cột, mọi phán
+   * đoán lệch ra ngoài đều bị kẹp trở lại 0.92 — ngay cạnh bóng. Đo thật thì sút
+   * sát góc trên chỉ vào 54% còn sút vào giữa vào 70%, tức là NGƯỢC với ý định.
+   *
+   * Trộn với một thói quen nghiêng về giữa thì góc mới thật sự là góc chết: thủ
+   * môn chỉ đọc được 45% hướng sút nên với quả sút ở 0.9 anh ta thường chỉ đổ
+   * tới quanh 0.4.
    */
-  const x = clamp(guessX, -0.92, 0.92);
-  const y = clamp(guessY, 0.05, 0.95);
+  const habitX = (random() * 2 - 1) * 0.4;
+  // Thủ môn có thói quen đổ THẤP: bóng sát đất là loại phải cản nhiều nhất
+  const habitY = 0.12 + random() * 0.26;
+
+  const readX = shot.aimX * s + habitX * (1 - s);
+  const readY = shot.aimY * s + habitY * (1 - s);
+
+  // Nhiễu phản ứng, cũng nhỏ đi khi thủ môn giỏi hơn
+  const jitter = (1 - s) * 0.32;
+  /*
+   * KHÔNG kẹp x, y vào trong khung thành. Thủ môn đổ người ra ngoài cột là
+   * chuyện có thật, và kẹp lại chính là nguồn gốc của lỗi nói trên. Hai giá trị
+   * này chỉ dùng để tính có cản được hay không — phần vẽ dùng `pose`, không dùng
+   * toạ độ, nên để tự do cũng không làm hình bị lệch ra khỏi sân.
+   */
+  const x = readX + (random() * 2 - 1) * jitter;
+  const y = readY + (random() * 2 - 1) * jitter * 0.6;
 
   let pose: KeeperPose;
   if (Math.abs(x) < 0.3) pose = y > 0.55 ? 'jumpHigh' : 'catchCenter';
@@ -206,6 +248,119 @@ export function resolveShot(shot: Shot, dive: KeeperDive): ShotResolution {
     return { outcome: 'saved', saved: true, keeperPose: dive.pose };
   }
   return { outcome: 'goal', saved: false, keeperPose: 'beaten' };
+}
+
+/* ------------------------------------------------------------------ */
+/* Chế độ BÉ LÀM THỦ MÔN                                               */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Máy sút một quả penalty.
+ *
+ * Cố ý KHÔNG rải đều khắp khung thành: máy nhắm vào một trong các vùng góc, vì
+ * quả sút vào giữa thì bé chỉ cần đứng im là bắt được, chơi vài lượt là nhàm.
+ * `difficulty` 0..1 quyết định quả sút bám sát góc và căng đến đâu.
+ *
+ * Trả về `Shot` để dùng lại nguyên `ballAt()` và `flightMs()` của chế độ sút —
+ * bóng bay theo cùng một công thức nên bé học được cách đọc quỹ đạo ở cả hai chế độ.
+ */
+export function aiShot(random: () => number, difficulty: number): Shot {
+  const d = clamp(difficulty, 0, 1);
+
+  /*
+   * Sáu vùng nhắm: bốn góc, cộng hai vùng nửa cao hai bên. Không có vùng giữa
+   * thấp — đó là chỗ thủ môn đứng sẵn, sút vào đấy thì lượt nào cũng bị bắt.
+   */
+  const zones: { x: number; y: number }[] = [
+    { x: -0.82, y: 0.14 },
+    { x: 0.82, y: 0.14 },
+    { x: -0.82, y: 0.82 },
+    { x: 0.82, y: 0.82 },
+    { x: -0.5, y: 0.6 },
+    { x: 0.5, y: 0.6 },
+  ];
+  const zone = zones[Math.floor(random() * zones.length) % zones.length];
+
+  // Máy yếu thì lệch khỏi góc nhiều hơn, nên bóng dạt về giữa và dễ bắt hơn
+  const spread = (1 - d) * 0.42;
+  const aimX = clamp(zone.x + (random() * 2 - 1) * spread, -0.93, 0.93);
+  const aimY = clamp(zone.y + (random() * 2 - 1) * spread * 0.6, 0.06, 0.94);
+
+  const power = clamp(0.42 + d * 0.45 + random() * 0.13, 0.12, 1);
+  const curve = clamp((random() * 2 - 1) * d * 0.8, -1, 1);
+
+  return { aimX, aimY, power, curve, valid: true };
+}
+
+/** Tầm với của bé khi làm thủ môn — rộng hơn máy, để bắt được là có thật */
+export const PLAYER_REACH_X = 0.62;
+export const PLAYER_REACH_Y = 0.58;
+
+/**
+ * Đổi thao tác của bé thành một lần đổ người.
+ *
+ * Nhận cả CHẠM và VUỐT: chạm thì lấy đúng điểm chạm, vuốt thì lấy điểm cuối —
+ * nên bé chạm nhanh một cái cũng chơi được, không bắt phải vuốt cho đủ dài như
+ * bên sút. Với một cú sút chỉ bay 400-700ms thì đòi thao tác phức tạp là bé
+ * không kịp.
+ *
+ * @param x,y Toạ độ trên khung chơi, tính bằng pixel
+ * @param goal Hình chữ nhật khung thành trên khung chơi, cùng đơn vị pixel
+ */
+export function diveFromTouch(
+  x: number,
+  y: number,
+  goal: { left: number; top: number; width: number; height: number },
+): KeeperDive {
+  // Đổi pixel sang cùng hệ toạ độ với `Shot`: aimX -1..1, aimY 0 (đất) .. 1 (xà)
+  const relX = (x - (goal.left + goal.width / 2)) / (goal.width / 2);
+  const relY = (goal.top + goal.height - y) / goal.height;
+
+  const diveX = clamp(relX, -1.15, 1.15);
+  const diveY = clamp(relY, 0, 1.15);
+
+  let pose: KeeperPose;
+  if (Math.abs(diveX) < 0.3) pose = diveY > 0.55 ? 'jumpHigh' : 'catchCenter';
+  else pose = diveX < 0 ? 'diveLeft' : 'diveRight';
+
+  return { x: diveX, y: diveY, pose };
+}
+
+/** Kết quả một lượt bé bắt bóng */
+export interface SaveResolution {
+  /** Bé có cản được không */
+  saved: boolean;
+  /** Khoảng cách từ tay bé tới bóng, 0 là đúng điểm — dùng để chấm "sát quá!" */
+  missBy: number;
+}
+
+/**
+ * Bé có bắt được quả sút này không.
+ *
+ * Dùng tầm với RỘNG HƠN của máy (`PLAYER_REACH_*` so với `KEEPER_REACH_*`) và
+ * KHÔNG trừ bớt theo lực/xoáy. Lý do: bé chỉ có 400-700ms để phản ứng, còn máy
+ * thì "biết" quả sút ngay lúc nó xảy ra. Cho hai bên cùng một tầm với thì bé
+ * gần như không bao giờ bắt được, và một trò không thắng nổi thì bé bỏ.
+ */
+export function resolveSave(shot: Shot, dive: KeeperDive): SaveResolution {
+  // Bóng ra ngoài thì không tính là bắt được — nhưng cũng không phải bàn thắng
+  if (!shot.valid || shot.aimY > 1 || Math.abs(shot.aimX) > 1) {
+    return { saved: false, missBy: 0 };
+  }
+
+  const dx = Math.abs(dive.x - shot.aimX);
+  const dy = Math.abs(dive.y - shot.aimY);
+  const saved = dx <= PLAYER_REACH_X && dy <= PLAYER_REACH_Y;
+
+  // Chuẩn hoá về cùng thang để so được hai chiều với nhau
+  const missBy = Math.hypot(dx / PLAYER_REACH_X, dy / PLAYER_REACH_Y);
+  return { saved, missBy };
+}
+
+/** Lời khen / an ủi sau một lượt bắt bóng */
+export function saveFeedback(result: SaveResolution): string {
+  if (result.saved) return result.missBy < 0.45 ? '🧤 Bắt gọn trong tay!' : '✋ Cản được rồi!';
+  return result.missBy < 1.25 ? '😮 Sát quá, chỉ thiếu một chút!' : '😵 Bóng vào lưới rồi!';
 }
 
 /* ------------------------------------------------------------------ */

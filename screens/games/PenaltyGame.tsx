@@ -15,15 +15,20 @@ import { usePlaytime } from '../../context/PlaytimeContext';
 import { playGameSound } from '../../lib/gameSound';
 import GameShell from './GameShell';
 import {
+  aiShot,
   ballAt,
   describeShot,
+  diveFromTouch,
   flightMs,
   goalBonus,
   goalPraise,
   keeperDecide,
   OUTCOME_LABEL,
+  resolveSave,
   resolveShot,
+  saveFeedback,
   shotFromSwipe,
+  type KeeperDive,
   type KeeperPose,
   type Shot,
   type ShotOutcome,
@@ -32,9 +37,30 @@ import {
 const TOTAL_SHOTS = 5;
 /** Trình độ thủ môn: 0 là đoán bừa, 1 là đoán đúng hướng sút */
 const KEEPER_SKILL = 0.45;
+/** Trình độ cầu thủ máy khi BÉ làm thủ môn: 0 sút bừa, 1 sút sát góc */
+const AI_STRIKER_SKILL = 0.55;
 const BALL_SIZE = 26;
+/** Cỡ vòng tròn đánh dấu điểm ngắm / điểm đổ người */
+const AIM_MARK_SIZE = 26;
+/**
+ * Thủ môn cao bằng 60% chiều cao khung thành (trước là 78%).
+ *
+ * Đi cùng việc hạ `KEEPER_REACH_*` trong `penaltyLogic.ts` — thu nhỏ hình mà giữ
+ * tầm với thì bé thấy góc trống, sút vào đó, vẫn bị cản bởi một thủ môn tay dài
+ * vô hình.
+ */
+const KEEPER_HEIGHT_RATIO = 0.6;
+/** Thời gian máy chạy đà trước khi sút, ở chế độ bé làm thủ môn */
+const RUNUP_MS = 900;
 
-type Phase = 'aiming' | 'flying' | 'result' | 'done';
+/** Hai chế độ chơi, chọn ở màn hình đầu của trò */
+type GameMode = 'striker' | 'keeper';
+
+/**
+ * `runup` chỉ có ở chế độ bé làm thủ môn: máy đang chạy đà, bé nhìn hướng chân
+ * sút để đoán. Các phase còn lại dùng chung cho cả hai chế độ.
+ */
+type Phase = 'menu' | 'aiming' | 'runup' | 'flying' | 'result' | 'done';
 
 /**
  * Toạ độ ngón tay so với góc trên bên trái của sân.
@@ -340,12 +366,21 @@ export default function PenaltyGame({ onExit }: { onExit: () => void }) {
     height: Math.max(280, Math.min(460, windowSize.height * 0.52)),
   }));
 
-  const [phase, setPhase] = useState<Phase>('aiming');
+  /** Bắt đầu ở màn hình chọn chế độ, không vào thẳng một chế độ nào */
+  const [phase, setPhase] = useState<Phase>('menu');
+  const [mode, setMode] = useState<GameMode>('striker');
   const [shotNumber, setShotNumber] = useState(1);
   const [goals, setGoals] = useState(0);
   const [score, setScore] = useState(0);
   const [best, setBest] = useState(0);
   const [bestScore, setBestScore] = useState(0);
+  /** Số quả bé cản được, chỉ dùng ở chế độ làm thủ môn */
+  const [saves, setSaves] = useState(0);
+  const [bestSaves, setBestSaves] = useState(0);
+  /** Cú đổ người của bé trong lượt đang bay; `null` là chưa kịp phản ứng */
+  const [playerDive, setPlayerDive] = useState<KeeperDive | null>(null);
+  /** Lưới rung khi bóng vào: 0 là yên, giảm dần về 0 sau mỗi bàn */
+  const [netShake, setNetShake] = useState(0);
   /** Điểm thưởng và lời khen của bàn thắng vừa ghi */
   const [reward, setReward] = useState<{ points: number; praise: string } | null>(null);
   const [outcome, setOutcome] = useState<ShotOutcome | null>(null);
@@ -371,6 +406,16 @@ export default function PenaltyGame({ onExit }: { onExit: () => void }) {
   playingRef.current = isPlaying;
   const phaseRef = useRef(phase);
   phaseRef.current = phase;
+  const modeRef = useRef(mode);
+  modeRef.current = mode;
+  /**
+   * Cú đổ người đọc qua ref, không qua state.
+   *
+   * Vòng lặp bay bóng cần giá trị MỚI NHẤT ở đúng khung hình bé chạm; đọc state
+   * trong closure của `tick` sẽ lấy giá trị của lúc bắt đầu lượt, tức luôn `null`.
+   */
+  const playerDiveRef = useRef<KeeperDive | null>(null);
+  const goalRef = useRef({ left: 0, top: 0, width: 0, height: 0 });
   const nextSparkId = useRef(1);
 
   const handleLayout = useCallback((event: LayoutChangeEvent) => {
@@ -397,6 +442,27 @@ export default function PenaltyGame({ onExit }: { onExit: () => void }) {
   }, [area]);
 
   const spotY = area.height * 0.86;
+  goalRef.current = goal;
+
+  /* ---------------- Lưới rung sau bàn thắng ---------------- */
+  // Vòng lặp chỉ khởi động lại khi CHUYỂN từ yên sang rung, không phải mỗi khung
+  // hình — nên dependency là một cờ boolean, không phải chính biên độ.
+  const netShaking = netShake > 0;
+  useEffect(() => {
+    if (!netShaking) return;
+    let raf: number;
+    let last = Date.now();
+    const tick = () => {
+      const now = Date.now();
+      const dt = Math.min((now - last) / 1000, 0.05);
+      last = now;
+      // Tắt dần theo hàm mũ: rung mạnh lúc đầu rồi lịm đi, giống lưới thật
+      setNetShake((prev) => (prev < 0.02 ? 0 : prev * Math.pow(0.02, dt)));
+      raf = requestAnimationFrame(tick);
+    };
+    raf = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(raf);
+  }, [netShaking]);
 
   /* ---------------- Nhún nhảy khi chờ ---------------- */
   useEffect(() => {
@@ -512,6 +578,7 @@ export default function PenaltyGame({ onExit }: { onExit: () => void }) {
             setScore((prev) => prev + bonus);
             setReward({ points: bonus, praise: goalPraise(taken) });
             playGameSound('cheer');
+            setNetShake(1);
             burstFireworks(
               goal.centerX + taken.aimX * (goal.width / 2),
               goal.top + (1 - Math.min(1, taken.aimY)) * goal.height,
@@ -532,6 +599,91 @@ export default function PenaltyGame({ onExit }: { onExit: () => void }) {
     [burstFireworks, goal],
   );
 
+  /* ---------------- Chế độ BÉ LÀM THỦ MÔN: máy sút, bé cản ---------------- */
+  const facePenalty = useCallback(() => {
+    const taken = aiShot(Math.random, AI_STRIKER_SKILL);
+    setShot(taken);
+    setPlayerDive(null);
+    playerDiveRef.current = null;
+    setKeeperPose('idle');
+    setHint('Chạm về phía bóng để đổ người!');
+    setPhase('flying');
+    playGameSound('kick');
+
+    const duration = flightMs(taken);
+    let elapsed = 0;
+    let last = Date.now();
+    /** Đã chuyển dáng thủ môn theo cú chạm của bé chưa */
+    let posed = false;
+
+    const tick = () => {
+      const now = Date.now();
+      const frame = now - last;
+      last = now;
+      if (playingRef.current) elapsed += frame;
+
+      const t = Math.min(1, elapsed / duration);
+      setBall(ballAt(taken, t));
+
+      // Bé chạm lúc nào thì thủ môn đổ người ngay lúc đó
+      const dive = playerDiveRef.current;
+      if (!posed && dive) {
+        posed = true;
+        setKeeperPose(dive.pose);
+      }
+
+      if (t >= 1) {
+        /*
+         * Không chạm kịp thì coi như thủ môn đứng nguyên giữa khung, sát đất —
+         * chứ không phải "trượt tự động". Đứng im vẫn cản được quả sút vào giữa,
+         * đúng như ngoài sân.
+         */
+        const finalDive: KeeperDive =
+          dive ?? { x: 0, y: 0.12, pose: 'catchCenter' };
+        const result = resolveSave(taken, finalDive);
+
+        const outOfFrame = taken.aimY > 1 || Math.abs(taken.aimX) > 1;
+        setKeeperPose(result.saved ? finalDive.pose : 'beaten');
+        setOutcome(result.saved ? 'saved' : outOfFrame ? 'over' : 'goal');
+        setHint(saveFeedback(result));
+        setPhase('result');
+
+        if (result.saved) {
+          // Cản càng sát tay càng nhiều điểm
+          const bonus = 100 + Math.round((1 - Math.min(1, result.missBy)) * 80);
+          setSaves((prev) => prev + 1);
+          setScore((prev) => prev + bonus);
+          setReward({ points: bonus, praise: saveFeedback(result) });
+          playGameSound('save');
+        } else {
+          setReward(null);
+          if (outOfFrame) {
+            playGameSound('hurt');
+          } else {
+            // Máy ghi bàn: lưới rung và khán giả reo, nhưng không có pháo hoa
+            setNetShake(1);
+            playGameSound('cheer');
+          }
+        }
+        return;
+      }
+      rafRef.current = requestAnimationFrame(tick);
+    };
+    rafRef.current = requestAnimationFrame(tick);
+  }, []);
+
+  /**
+   * Máy chạy đà rồi sút.
+   *
+   * Chờ `RUNUP_MS` để bé kịp nhìn và chuẩn bị; không có nhịp này thì bóng bay
+   * ngay lúc lượt bắt đầu và bé không bao giờ phản ứng nổi.
+   */
+  useEffect(() => {
+    if (mode !== 'keeper' || phase !== 'runup' || !isPlaying) return;
+    const timer = setTimeout(facePenalty, RUNUP_MS);
+    return () => clearTimeout(timer);
+  }, [facePenalty, isPlaying, mode, phase]);
+
   useEffect(
     () => () => {
       if (rafRef.current !== null) cancelAnimationFrame(rafRef.current);
@@ -543,22 +695,61 @@ export default function PenaltyGame({ onExit }: { onExit: () => void }) {
   const responder = useMemo(
     () =>
       PanResponder.create({
-        onStartShouldSetPanResponder: () => phaseRef.current === 'aiming' && playingRef.current,
-        onMoveShouldSetPanResponder: () => phaseRef.current === 'aiming' && playingRef.current,
+        /*
+         * Hai chế độ nhận thao tác ở hai phase khác nhau:
+         *  - Sút phạt: lúc `aiming`, bé vuốt để sút.
+         *  - Làm thủ môn: lúc `flying`, bé chạm để đổ người trong khi bóng đang bay.
+         */
+        onStartShouldSetPanResponder: () =>
+          playingRef.current &&
+          (modeRef.current === 'striker'
+            ? phaseRef.current === 'aiming'
+            : phaseRef.current === 'flying'),
+        onMoveShouldSetPanResponder: () =>
+          playingRef.current &&
+          (modeRef.current === 'striker'
+            ? phaseRef.current === 'aiming'
+            : phaseRef.current === 'flying'),
         onPanResponderGrant: (event) => {
           const point = pointOf(event);
+
+          if (modeRef.current === 'keeper') {
+            // Chạm là đổ người ngay, không chờ nhấc ngón: cú sút chỉ bay 400-700ms
+            const dive = diveFromTouch(point.x, point.y, goalRef.current);
+            playerDiveRef.current = dive;
+            setPlayerDive(dive);
+            setTrail([point]);
+            return;
+          }
+
           swipeRef.current = { points: [point], startedAt: Date.now() };
           setTrail([point]);
           setHint(null);
         },
         onPanResponderMove: (event) => {
+          const point = pointOf(event);
+
+          if (modeRef.current === 'keeper') {
+            // Vuốt thì lấy điểm cuối, cho bé sửa hướng đổ người khi bóng đổi hướng
+            const dive = diveFromTouch(point.x, point.y, goalRef.current);
+            playerDiveRef.current = dive;
+            setPlayerDive(dive);
+            setTrail([point]);
+            return;
+          }
+
           const points = swipeRef.current.points;
-          points.push(pointOf(event));
+          points.push(point);
           // Chỉ giữ 14 điểm cuối: vệt sáng dài hơn thế vừa rối vừa tốn công vẽ
           if (points.length > 14) points.splice(0, points.length - 14);
           setTrail([...points]);
         },
         onPanResponderRelease: () => {
+          if (modeRef.current === 'keeper') {
+            setTrail([]);
+            return;
+          }
+
           const { points, startedAt } = swipeRef.current;
           setTrail([]);
           if (points.length < 2) return;
@@ -585,39 +776,78 @@ export default function PenaltyGame({ onExit }: { onExit: () => void }) {
     [takeShot],
   );
 
-  /* ---------------- Lượt sút tiếp theo ---------------- */
+  /* ---------------- Lượt tiếp theo / chơi lại / đổi chế độ ---------------- */
+
+  /** Xoá sạch trạng thái của một lượt, dùng chung cho cả hai chế độ */
+  const clearRound = useCallback(() => {
+    setReward(null);
+    setOutcome(null);
+    setShot(null);
+    setKeeperPose('idle');
+    setBall({ x: 0, progress: 0, lift: 0 });
+    setPlayerDive(null);
+    playerDiveRef.current = null;
+    setNetShake(0);
+    setHint(null);
+  }, []);
+
+  /** Phase mở đầu một lượt: bé sút thì chờ vuốt, bé bắt thì máy chạy đà */
+  const openingPhase = useCallback(
+    (forMode: GameMode): Phase => (forMode === 'striker' ? 'aiming' : 'runup'),
+    [],
+  );
+
   const nextShot = useCallback(() => {
     if (shotNumber >= TOTAL_SHOTS) {
       setBest((prev) => Math.max(prev, goals));
       setBestScore((prev) => Math.max(prev, score));
+      setBestSaves((prev) => Math.max(prev, saves));
       setPhase('done');
       return;
     }
     setShotNumber((prev) => prev + 1);
-    setReward(null);
-    setOutcome(null);
-    setShot(null);
-    setKeeperPose('idle');
-    setBall({ x: 0, progress: 0, lift: 0 });
-    setHint(null);
-    setPhase('aiming');
-  }, [goals, score, shotNumber]);
+    clearRound();
+    setPhase(openingPhase(mode));
+  }, [clearRound, goals, mode, openingPhase, saves, score, shotNumber]);
 
   const restart = useCallback(() => {
     setBest((prev) => Math.max(prev, goals));
     setBestScore((prev) => Math.max(prev, score));
+    setBestSaves((prev) => Math.max(prev, saves));
     setShotNumber(1);
     setGoals(0);
+    setSaves(0);
     setScore(0);
-    setReward(null);
-    setOutcome(null);
-    setShot(null);
-    setKeeperPose('idle');
-    setBall({ x: 0, progress: 0, lift: 0 });
     setSparks([]);
-    setHint(null);
-    setPhase('aiming');
-  }, [goals, score]);
+    clearRound();
+    setPhase(openingPhase(mode));
+  }, [clearRound, goals, mode, openingPhase, saves, score]);
+
+  /** Bắt đầu một chế độ từ màn hình chọn */
+  const startMode = useCallback(
+    (chosen: GameMode) => {
+      setMode(chosen);
+      modeRef.current = chosen;
+      setShotNumber(1);
+      setGoals(0);
+      setSaves(0);
+      setScore(0);
+      setSparks([]);
+      clearRound();
+      setPhase(openingPhase(chosen));
+    },
+    [clearRound, openingPhase],
+  );
+
+  const backToMenu = useCallback(() => {
+    setBest((prev) => Math.max(prev, goals));
+    setBestScore((prev) => Math.max(prev, score));
+    setBestSaves((prev) => Math.max(prev, saves));
+    if (rafRef.current !== null) cancelAnimationFrame(rafRef.current);
+    setSparks([]);
+    clearRound();
+    setPhase('menu');
+  }, [clearRound, goals, saves, score]);
 
   /* ---------------- Vị trí bóng trên màn hình ---------------- */
   const ballScreen = useMemo(() => {
@@ -630,33 +860,152 @@ export default function PenaltyGame({ onExit }: { onExit: () => void }) {
     return { x, y, size };
   }, [ball, goal, spotY]);
 
+  /* ---------------- Quỹ đạo xem trước khi đang vuốt ---------------- */
+  /**
+   * Đường bóng DỰ KIẾN của cú vuốt đang thực hiện, vẽ thành một chuỗi điểm mờ.
+   *
+   * Tính bằng chính `shotFromSwipe` + `ballAt` mà cú sút thật sẽ dùng, nên cái bé
+   * thấy đúng là cái sẽ xảy ra — nếu vẽ bằng một công thức xấp xỉ riêng thì
+   * đường xem trước và đường bay thật sẽ lệch nhau, và bé học sai cách ngắm.
+   *
+   * Chỉ có ở chế độ sút phạt; ở chế độ làm thủ môn thì vẽ đường này là chỉ điểm
+   * cho bé biết trước bóng đi đâu, mất hết cái hay.
+   */
+  const preview = useMemo(() => {
+    if (mode !== 'striker' || phase !== 'aiming' || trail.length < 2) return null;
+
+    const first = trail[0];
+    const last = trail[trail.length - 1];
+    const mid = trail[Math.floor(trail.length / 2)];
+    const guess = shotFromSwipe({
+      startX: first.x,
+      startY: first.y,
+      midX: mid.x,
+      midY: mid.y,
+      endX: last.x,
+      endY: last.y,
+      // Chưa nhấc ngón nên chưa biết tổng thời gian; lấy mốc đã trôi tới giờ
+      durationMs: Math.max(40, Date.now() - swipeRef.current.startedAt),
+      fieldWidth: area.width,
+      fieldHeight: area.height,
+    });
+    if (!guess.valid) return null;
+
+    const goalLineY = goal.top + goal.height;
+    const points = Array.from({ length: 14 }, (_, i) => {
+      const t = (i + 1) / 14;
+      const at = ballAt(guess, t);
+      return {
+        x: goal.centerX + at.x * (goal.width / 2) * at.progress,
+        y: spotY + (goalLineY - spotY) * at.progress - at.lift * goal.height,
+      };
+    });
+    return { points, shot: guess };
+  }, [area, goal, mode, phase, spotY, trail]);
+
+  /* ---------------- Nhãn điểm theo chế độ ---------------- */
+  const scoreLabel =
+    mode === 'striker'
+      ? `Lượt ${Math.min(shotNumber, TOTAL_SHOTS)}/${TOTAL_SHOTS}  ·  ⚽ ${goals} bàn  ·  ⭐ ${score} điểm`
+      : `Lượt ${Math.min(shotNumber, TOTAL_SHOTS)}/${TOTAL_SHOTS}  ·  🧤 ${saves} lần cản  ·  ⭐ ${score} điểm`;
+
+  /* ---------------- Màn hình chọn chế độ ---------------- */
+  if (phase === 'menu') {
+    return (
+      <GameShell
+        title="Đá Penalty"
+        emoji="⚽"
+        color={colors.success}
+        scoreLabel="Chọn chế độ chơi"
+        onExit={onExit}
+      >
+        <View style={styles.menuWrap}>
+          <Text style={styles.menuTitle}>Con muốn chơi kiểu nào?</Text>
+
+          <Pressable
+            onPress={() => startMode('striker')}
+            accessibilityRole="button"
+            accessibilityLabel="Chơi chế độ sút phạt penalty"
+            style={({ pressed }) => [styles.modeCard, pressed && styles.modeCardOn]}
+          >
+            <Text style={styles.modeEmoji}>⚽</Text>
+            <View style={styles.modeTextGroup}>
+              <Text style={styles.modeName}>Sút phạt penalty</Text>
+              <Text style={styles.modeDesc}>
+                Vuốt từ quả bóng lên khung thành. Vuốt nhanh thì bóng căng, vuốt
+                cong thì bóng xoáy. Nhắm vào góc để thủ môn không với tới.
+              </Text>
+            </View>
+          </Pressable>
+
+          <Pressable
+            onPress={() => startMode('keeper')}
+            accessibilityRole="button"
+            accessibilityLabel="Chơi chế độ bé làm thủ môn"
+            style={({ pressed }) => [styles.modeCard, pressed && styles.modeCardOn]}
+          >
+            <Text style={styles.modeEmoji}>🧤</Text>
+            <View style={styles.modeTextGroup}>
+              <Text style={styles.modeName}>Bé làm thủ môn</Text>
+              <Text style={styles.modeDesc}>
+                Máy chạy đà rồi sút vào các góc. Chạm nhanh về phía bóng đang bay
+                để đổ người cản phá.
+              </Text>
+            </View>
+          </Pressable>
+
+          {(best > 0 || bestSaves > 0) && (
+            <Text style={styles.menuBest}>
+              Kỷ lục: ⚽ {best} bàn · 🧤 {bestSaves} lần cản · ⭐ {bestScore} điểm
+            </Text>
+          )}
+        </View>
+      </GameShell>
+    );
+  }
+
   return (
     <GameShell
       title="Đá Penalty"
       emoji="⚽"
       color={colors.success}
-      scoreLabel={`Lượt ${Math.min(shotNumber, TOTAL_SHOTS)}/${TOTAL_SHOTS}  ·  ⚽ ${goals} bàn  ·  ⭐ ${score} điểm`}
+      scoreLabel={scoreLabel}
       onExit={onExit}
     >
       <View style={styles.container}>
         <View
           style={styles.field}
           onLayout={handleLayout}
-          accessibilityLabel="Sân bóng: vuốt từ quả bóng lên khung thành để sút"
+          accessibilityLabel={
+            mode === 'striker'
+              ? 'Sân bóng: vuốt từ quả bóng lên khung thành để sút'
+              : 'Sân bóng: chạm về phía bóng đang bay để đổ người cản phá'
+          }
           {...responder.panHandlers}
         >
           {/* Cỏ và vạch vôi */}
           <View style={[styles.grassDark, { top: goal.top + goal.height }]} />
           <View style={[styles.penaltyArc, { top: goal.top + goal.height + 6 }]} />
 
-          {/* Khung thành */}
+          {/* Khung thành. Lưới rung thì chỉ dịch phần LƯỚI, không dịch cả cột. */}
           <View
             style={[
               styles.goal,
               { left: goal.left, top: goal.top, width: goal.width, height: goal.height },
             ]}
           >
-            <View style={styles.net} />
+            <View
+              style={[
+                styles.net,
+                netShake > 0 && {
+                  transform: [
+                    // Dao động tắt dần: tần số cao, biên độ theo `netShake`
+                    { translateX: Math.sin(netShake * 34) * netShake * 7 },
+                    { translateY: Math.cos(netShake * 27) * netShake * 4 },
+                  ],
+                },
+              ]}
+            />
           </View>
 
           {/* Thủ môn đứng ở vạch vôi, giữa khung thành */}
@@ -669,7 +1018,7 @@ export default function PenaltyGame({ onExit }: { onExit: () => void }) {
           >
             <Keeper
               pose={keeperPose}
-              height={goal.height * 0.78}
+              height={goal.height * KEEPER_HEIGHT_RATIO}
               halfGoal={goal.width / 2}
               bounce={bounce}
             />
@@ -691,6 +1040,71 @@ export default function PenaltyGame({ onExit }: { onExit: () => void }) {
           >
             ⚽
           </Text>
+
+          {/* Quỹ đạo dự kiến của cú vuốt đang thực hiện */}
+          {preview?.points.map((point, index) => {
+            const t = (index + 1) / preview.points.length;
+            const size = 10 - t * 5;
+            return (
+              <View
+                key={`aim-${index}`}
+                pointerEvents="none"
+                style={{
+                  position: 'absolute',
+                  left: point.x - size / 2,
+                  top: point.y - size / 2,
+                  width: size,
+                  height: size,
+                  borderRadius: size / 2,
+                  backgroundColor: '#FFFFFF',
+                  opacity: 0.28 + t * 0.5,
+                }}
+              />
+            );
+          })}
+
+          {/* Mũi nhắm ở điểm bóng sẽ tới trên khung thành */}
+          {preview && (
+            <View
+              pointerEvents="none"
+              style={{
+                position: 'absolute',
+                left:
+                  goal.centerX + preview.shot.aimX * (goal.width / 2) - AIM_MARK_SIZE / 2,
+                top:
+                  goal.top +
+                  (1 - Math.min(1, preview.shot.aimY)) * goal.height -
+                  AIM_MARK_SIZE / 2,
+                width: AIM_MARK_SIZE,
+                height: AIM_MARK_SIZE,
+                borderRadius: AIM_MARK_SIZE / 2,
+                borderWidth: 3,
+                borderColor:
+                  Math.abs(preview.shot.aimX) > 1 || preview.shot.aimY > 1
+                    ? '#F87171'
+                    : '#FDE047',
+              }}
+            />
+          )}
+
+          {/* Nơi bé vừa chạm để đổ người, chế độ làm thủ môn */}
+          {mode === 'keeper' && playerDive && phase !== 'result' && (
+            <View
+              pointerEvents="none"
+              style={{
+                position: 'absolute',
+                left:
+                  goal.centerX + playerDive.x * (goal.width / 2) - AIM_MARK_SIZE / 2,
+                top:
+                  goal.top + (1 - Math.min(1, playerDive.y)) * goal.height - AIM_MARK_SIZE / 2,
+                width: AIM_MARK_SIZE,
+                height: AIM_MARK_SIZE,
+                borderRadius: AIM_MARK_SIZE / 2,
+                borderWidth: 3,
+                borderColor: '#60A5FA',
+              }}
+            />
+          )}
 
           {/* Vệt sáng theo ngón tay khi đang vuốt */}
           {trail.map((point, index) => (
@@ -728,7 +1142,7 @@ export default function PenaltyGame({ onExit }: { onExit: () => void }) {
             />
           ))}
 
-          {/* Hướng dẫn khi đang chờ sút */}
+          {/* Hướng dẫn khi đang chờ sút (chế độ sút phạt) */}
           {phase === 'aiming' && (
             <View style={styles.guide} pointerEvents="none">
               <Text style={styles.guideText}>
@@ -740,51 +1154,101 @@ export default function PenaltyGame({ onExit }: { onExit: () => void }) {
             </View>
           )}
 
+          {/* Máy đang chạy đà (chế độ bé làm thủ môn) */}
+          {phase === 'runup' && (
+            <View style={styles.guide} pointerEvents="none">
+              <Text style={styles.guideText}>🏃 Cầu thủ đang chạy đà…</Text>
+              <Text style={styles.guideHint}>
+                Chạm nhanh về phía bóng bay để đổ người cản phá!
+              </Text>
+            </View>
+          )}
+
           {/* Kết quả lượt sút */}
           {phase === 'result' && outcome && (
             <View style={styles.resultBox} pointerEvents="none">
               <Text
                 style={[
                   styles.resultText,
-                  outcome === 'goal' ? styles.resultGoal : styles.resultMiss,
+                  // Ở chế độ làm thủ môn thì CẢN được mới là thắng, nên màu đảo lại
+                  (mode === 'striker' ? outcome === 'goal' : outcome === 'saved')
+                    ? styles.resultGoal
+                    : styles.resultMiss,
                 ]}
               >
-                {OUTCOME_LABEL[outcome]}
+                {mode === 'keeper' && outcome === 'saved'
+                  ? '🧤 CẢN ĐƯỢC!'
+                  : OUTCOME_LABEL[outcome]}
               </Text>
               {reward && (
                 <Text style={styles.rewardText}>
                   🎉 {reward.praise} +{reward.points} điểm
                 </Text>
               )}
-              {shot && <Text style={styles.resultDetail}>{describeShot(shot)}</Text>}
+              {mode === 'keeper'
+                ? hint && <Text style={styles.resultDetail}>{hint}</Text>
+                : shot && <Text style={styles.resultDetail}>{describeShot(shot)}</Text>}
             </View>
           )}
 
           {/* Hết 5 lượt */}
           {phase === 'done' && (
             <View style={styles.overlay}>
-              <Text style={styles.overlayEmoji}>{goals >= 4 ? '🏆' : goals >= 2 ? '👏' : '💪'}</Text>
-              <Text style={styles.overlayTitle}>
-                Ghi được {goals}/{TOTAL_SHOTS} bàn
-              </Text>
-              <Text style={styles.overlayText}>
-                {goals >= 4
-                  ? 'Chân sút cừ khôi! Vuốt vào góc thật hiểm luôn.'
-                  : goals >= 2
-                    ? 'Khá lắm! Thử vuốt cong để bóng xoáy qua tay thủ môn nhé.'
-                    : 'Vuốt nhanh hơn và nhắm vào hai góc xa nhé!'}
-              </Text>
+              {mode === 'striker' ? (
+                <>
+                  <Text style={styles.overlayEmoji}>
+                    {goals >= 4 ? '🏆' : goals >= 2 ? '👏' : '💪'}
+                  </Text>
+                  <Text style={styles.overlayTitle}>
+                    Ghi được {goals}/{TOTAL_SHOTS} bàn
+                  </Text>
+                  <Text style={styles.overlayText}>
+                    {goals >= 4
+                      ? 'Chân sút cừ khôi! Vuốt vào góc thật hiểm luôn.'
+                      : goals >= 2
+                        ? 'Khá lắm! Thử vuốt cong để bóng xoáy qua tay thủ môn nhé.'
+                        : 'Vuốt nhanh hơn và nhắm vào hai góc xa nhé!'}
+                  </Text>
+                </>
+              ) : (
+                <>
+                  <Text style={styles.overlayEmoji}>
+                    {saves >= 4 ? '🏆' : saves >= 2 ? '🧤' : '💪'}
+                  </Text>
+                  <Text style={styles.overlayTitle}>
+                    Cản được {saves}/{TOTAL_SHOTS} quả
+                  </Text>
+                  <Text style={styles.overlayText}>
+                    {saves >= 4
+                      ? 'Thủ môn xuất sắc! Phản xạ nhanh như điện.'
+                      : saves >= 2
+                        ? 'Tốt lắm! Nhìn hướng chân sút để đoán sớm hơn nhé.'
+                        : 'Chạm sớm hơn một nhịp và nhắm về phía bóng đang bay nhé!'}
+                  </Text>
+                </>
+              )}
               <Text style={styles.overlayScore}>⭐ {score} điểm</Text>
               <Text style={styles.overlayBest}>
-                Cao nhất: {Math.max(best, goals)} bàn · {Math.max(bestScore, score)} điểm
+                Cao nhất: ⚽ {Math.max(best, goals)} bàn · 🧤{' '}
+                {Math.max(bestSaves, saves)} lần cản · {Math.max(bestScore, score)} điểm
               </Text>
               <Pressable
                 onPress={restart}
                 accessibilityRole="button"
-                accessibilityLabel="Đá lại"
+                accessibilityLabel={mode === 'striker' ? 'Đá lại' : 'Bắt lại'}
                 style={({ pressed }) => [styles.button, pressed && styles.pressed]}
               >
-                <Text style={styles.buttonText}>⚽ ĐÁ LẠI</Text>
+                <Text style={styles.buttonText}>
+                  {mode === 'striker' ? '⚽ ĐÁ LẠI' : '🧤 BẮT LẠI'}
+                </Text>
+              </Pressable>
+              <Pressable
+                onPress={backToMenu}
+                accessibilityRole="button"
+                accessibilityLabel="Đổi chế độ chơi"
+                style={({ pressed }) => [styles.ghostButton, pressed && styles.pressed]}
+              >
+                <Text style={styles.ghostButtonText}>↩ Đổi chế độ</Text>
               </Pressable>
             </View>
           )}
@@ -808,7 +1272,9 @@ export default function PenaltyGame({ onExit }: { onExit: () => void }) {
           ) : (
             <Text style={styles.bottomHint}>
               {hint ??
-                `Lượt ${Math.min(shotNumber, TOTAL_SHOTS)}/${TOTAL_SHOTS} · ghi được ${goals} bàn · ${score} điểm`}
+                (mode === 'striker'
+                  ? `Lượt ${Math.min(shotNumber, TOTAL_SHOTS)}/${TOTAL_SHOTS} · ghi được ${goals} bàn · ${score} điểm`
+                  : `Lượt ${Math.min(shotNumber, TOTAL_SHOTS)}/${TOTAL_SHOTS} · cản được ${saves} quả · ${score} điểm`)}
             </Text>
           )}
         </View>
@@ -819,6 +1285,55 @@ export default function PenaltyGame({ onExit }: { onExit: () => void }) {
 
 const styles = StyleSheet.create({
   container: { flex: 1, padding: spacing.md, gap: spacing.sm },
+
+  // ---- Màn hình chọn chế độ ----
+  menuWrap: {
+    flex: 1,
+    padding: spacing.lg,
+    gap: spacing.md,
+    justifyContent: 'center',
+    maxWidth: 520,
+    width: '100%',
+    alignSelf: 'center',
+  },
+  menuTitle: {
+    fontSize: 20,
+    fontWeight: '800',
+    color: colors.text,
+    textAlign: 'center',
+    marginBottom: spacing.sm,
+  },
+  modeCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.md,
+    backgroundColor: colors.surface,
+    borderRadius: radius.xl,
+    borderWidth: 2,
+    borderColor: colors.success,
+    padding: spacing.lg,
+    minHeight: touch.primary,
+    ...elevation(1),
+  },
+  modeCardOn: { opacity: 0.8 },
+  modeEmoji: { fontSize: 40 },
+  modeTextGroup: { flex: 1, gap: 4 },
+  modeName: { fontSize: 17, fontWeight: '800', color: colors.text },
+  modeDesc: { fontSize: 13, color: colors.textMuted, lineHeight: 19 },
+  menuBest: {
+    fontSize: 12,
+    color: colors.textMuted,
+    textAlign: 'center',
+    marginTop: spacing.sm,
+  },
+
+  ghostButton: {
+    minHeight: touch.min,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: spacing.lg,
+  },
+  ghostButtonText: { fontSize: 14, fontWeight: '800', color: '#E2E8F0' },
 
   field: {
     flex: 1,
