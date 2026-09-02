@@ -476,7 +476,7 @@ export default function ZombieGame({ onExit }: { onExit: () => void }) {
   const [note, setNote] = useState<string | null>(null);
 
   const worldRef = useRef<World | null>(null);
-  const inputRef = useRef({ moveX: 0, moveY: 0, firing: false, fireOnce: false });
+  const inputRef = useRef({ moveX: 0, moveY: 0, firing: false, fireOnce: false, useBomb: false });
   const rafRef = useRef<number | null>(null);
   const lastTimeRef = useRef(0);
   const noteTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -510,7 +510,7 @@ export default function ZombieGame({ onExit }: { onExit: () => void }) {
 
   const startRun = useCallback(() => {
     worldRef.current = createWorld(area.width, area.height, Date.now() % 2147483647);
-    inputRef.current = { moveX: 0, moveY: 0, firing: false, fireOnce: false };
+    inputRef.current = { moveX: 0, moveY: 0, firing: false, fireOnce: false, useBomb: false };
     setFrame(snapshot(worldRef.current));
     setNote(null);
     setPhase('playing');
@@ -548,8 +548,11 @@ export default function ZombieGame({ onExit }: { onExit: () => void }) {
         moveX: input.moveX,
         moveY: input.moveY,
         firing: input.firing || input.fireOnce,
+        useBomb: input.useBomb,
       });
+      // Hai cờ một nhịp: xoá NGAY sau advance để một lần bấm chỉ tính một lần
       input.fireOnce = false;
+      input.useBomb = false;
 
       for (const event of drainEvents(world)) playGameSound(event);
       setFrame(snapshot(world));
@@ -587,11 +590,23 @@ export default function ZombieGame({ onExit }: { onExit: () => void }) {
     inputRef.current.fireOnce = true;
   }, []);
 
+  /**
+   * Tuyệt chiêu: nổ một quả bom đang giữ.
+   *
+   * Chỉ dựng cờ, việc tiêu bom do `advance()` làm — nếu gọi `detonateBomb` thẳng
+   * từ đây thì nó chạy ngoài vòng lặp, có thể xen vào giữa một khung hình đang
+   * tính dở và làm số zombie đọc được ở hai nửa khung hình khác nhau.
+   */
+  const handleBombPress = useCallback(() => {
+    inputRef.current.useBomb = true;
+  }, []);
+
   const togglePause = useCallback(() => {
     // Nhả nút bắn để khi chơi tiếp không bắn liên tục ngoài ý muốn
     inputRef.current.firing = false;
     inputRef.current.moveX = 0;
     inputRef.current.moveY = 0;
+    inputRef.current.useBomb = false;
     setPhase((prev) =>
       prev === 'paused' ? 'playing' : prev === 'playing' ? 'paused' : prev,
     );
@@ -658,6 +673,8 @@ export default function ZombieGame({ onExit }: { onExit: () => void }) {
 
   const hpRatio = frame ? Math.max(0, frame.hp / frame.maxHp) : 1;
   const inRun = phase !== 'start';
+  /** Số bom tuyệt chiêu đang giữ; chưa có frame nào thì coi như 0 */
+  const bombs = frame?.bombs ?? 0;
 
   return (
     <GameShell
@@ -872,6 +889,30 @@ export default function ZombieGame({ onExit }: { onExit: () => void }) {
                 style={({ pressed }) => [styles.fireButton, pressed && styles.fireButtonOn]}
               >
                 <Text style={styles.fireButtonText}>BẮN</Text>
+              </Pressable>
+
+              {/*
+                Nút TUYỆT CHIÊU, ngay trên nút BẮN ở góc dưới phải.
+                Hết bom thì mờ đi và `disabled` — vẫn hiện chứ không ẩn, để bé
+                biết là có tuyệt chiêu và đi tìm 💣, thay vì tưởng game không có.
+              */}
+              <Pressable
+                onPress={handleBombPress}
+                disabled={bombs <= 0}
+                accessibilityRole="button"
+                accessibilityLabel={
+                  bombs > 0
+                    ? `Dùng bom huỷ diệt, còn ${bombs} quả`
+                    : 'Chưa có bom huỷ diệt, hạ zombie để tìm'
+                }
+                style={({ pressed }) => [
+                  styles.bombButton,
+                  bombs <= 0 && styles.bombButtonOff,
+                  pressed && bombs > 0 && styles.bombButtonOn,
+                ]}
+              >
+                <Text style={styles.bombEmoji}>💣</Text>
+                <Text style={styles.bombCount}>{bombs}</Text>
               </Pressable>
             </>
           )}
@@ -1209,6 +1250,34 @@ const styles = StyleSheet.create({
     ...elevation(2),
   },
   fireButtonOn: { backgroundColor: 'rgba(153,27,27,0.9)' },
+
+  /** Nút tuyệt chiêu, xếp ngay trên nút BẮN cùng lề phải */
+  bombButton: {
+    position: 'absolute',
+    right: 22,
+    bottom: 118,
+    width: 68,
+    height: 68,
+    borderRadius: 34,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'rgba(249,115,22,0.82)',
+    borderWidth: 3,
+    borderColor: 'rgba(254,215,170,0.9)',
+  },
+  bombButtonOn: { backgroundColor: 'rgba(194,65,12,0.95)' },
+  bombButtonOff: {
+    backgroundColor: 'rgba(71,85,105,0.45)',
+    borderColor: 'rgba(148,163,184,0.5)',
+    opacity: 0.55,
+  },
+  bombEmoji: { fontSize: 26 },
+  bombCount: {
+    fontSize: 12,
+    fontWeight: '800',
+    color: '#FFF7ED',
+    marginTop: -2,
+  },
   fireButtonText: { color: '#FFFFFF', fontWeight: '800', fontSize: 22 },
 
   noteBar: { position: 'absolute', left: 0, right: 0, bottom: 120, alignItems: 'center' },

@@ -69,6 +69,14 @@ export interface Player {
   muzzleFlash: number;
   /** id zombie đang bị khoá mục tiêu, để vẽ tia ngắm */
   lockedTargetId: number | null;
+  /**
+   * Số bom huỷ diệt đang giữ trong tay (tuyệt chiêu).
+   *
+   * Trước đây nhặt 💣 là nổ ngay. Giữ lại để bấm nút mới dùng thì học sinh có
+   * quyền chọn thời điểm — dành bom cho wave boss thay vì tiêu mất nó lúc sân
+   * chỉ có vài con zombie thường.
+   */
+  bombs: number;
 }
 
 export interface Zombie {
@@ -152,7 +160,18 @@ export interface Input {
   moveY: number;
   /** Đang giữ nút BẮN */
   firing: boolean;
+  /**
+   * Vừa bấm nút TUYỆT CHIÊU trong khung hình này.
+   *
+   * Là cờ một nhịp, không phải trạng thái giữ nút: nơi gọi đặt `true` khi bé bấm
+   * rồi tự đặt lại `false` ngay sau `advance()`. Nếu để nó là trạng thái giữ thì
+   * một lần bấm sẽ tiêu hết cả kho bom trong vài khung hình.
+   */
+  useBomb: boolean;
 }
+
+/** Số bom tối đa giữ được cùng lúc */
+export const MAX_BOMBS = 3;
 
 export interface World {
   areaW: number;
@@ -234,7 +253,8 @@ export const POWERUPS: Record<PowerUpKind, PowerUpSpec> = {
     kind: 'nuke',
     emoji: '💣',
     name: 'Bom huỷ diệt',
-    hint: 'Nổ hạ sạch zombie thường trên sân',
+    // Nhặt là CẤT vào kho, bấm nút tuyệt chiêu mới nổ — xem `detonateBomb`
+    hint: 'Cất vào kho, bấm 💣 để nổ hạ sạch zombie thường',
     color: '#F97316',
   },
   frenzy: {
@@ -584,6 +604,7 @@ export function createWorld(areaW: number, areaH: number, seed = 20260901): Worl
       frenzy: 0,
       muzzleFlash: 0,
       lockedTargetId: null,
+      bombs: 0,
     },
     zombies: [],
     bullets: [],
@@ -908,19 +929,39 @@ function applyPowerUp(world: World, kind: PowerUpKind): void {
     case 'goldbag':
       giveGold(world, GOLDBAG_AMOUNT, p.x, p.y);
       break;
-    case 'nuke': {
-      // Chỉ hạ zombie THƯỜNG — boss, tank và zombie nhanh vẫn còn, để vật phẩm
-      // này mạnh nhưng không xoá sạch cả wave boss.
-      const doomed = world.zombies.filter((z) => z.kind === 'normal');
-      for (const z of doomed) {
-        spawnParticles(world, z.x, z.y, 3, '#F97316', 200);
-        killZombie(world, z);
-      }
-      world.zombies = world.zombies.filter((z) => z.kind !== 'normal');
-      pushEvent(world, 'explosion');
+    case 'nuke':
+      // KHÔNG nổ ngay: cất vào kho để bé bấm nút tuyệt chiêu khi cần
+      p.bombs = Math.min(MAX_BOMBS, p.bombs + 1);
       break;
-    }
   }
+}
+
+/**
+ * Kích hoạt một quả bom huỷ diệt — tuyệt chiêu của người chơi.
+ *
+ * Chỉ hạ zombie THƯỜNG. Boss, tank và zombie nhanh vẫn còn, để tuyệt chiêu mạnh
+ * nhưng không xoá sạch cả một wave boss chỉ bằng một cú bấm.
+ *
+ * Trả về `false` khi trong tay không còn bom, để nơi gọi biết mà không phát tiếng
+ * nổ vô nghĩa.
+ */
+export function detonateBomb(world: World): boolean {
+  const p = world.player;
+  if (p.bombs <= 0 || world.status !== 'playing') return false;
+
+  p.bombs -= 1;
+
+  const doomed = world.zombies.filter((z) => z.kind === 'normal');
+  for (const z of doomed) {
+    spawnParticles(world, z.x, z.y, 3, '#F97316', 200);
+    killZombie(world, z);
+  }
+  world.zombies = world.zombies.filter((z) => z.kind !== 'normal');
+
+  // Vòng sáng ở chỗ người chơi cho thấy vụ nổ toả ra từ đâu
+  spawnParticles(world, p.x, p.y, 14, '#FDBA74', 320);
+  pushEvent(world, 'explosion');
+  return true;
 }
 
 function killZombie(world: World, z: Zombie): void {
@@ -967,6 +1008,9 @@ export function advance(world: World, dt: number, input: Input): void {
 
   /* ---- Bắn ---- */
   world.fireCd = Math.max(0, world.fireCd - dt);
+  // Tuyệt chiêu: đặt TRƯỚC phần bắn để bom dọn sân ngay trong khung hình này
+  if (input.useBomb) detonateBomb(world);
+
   if (input.firing && world.fireCd <= 0) fire(world);
 
   /* ---- Đạn của người chơi ---- */
@@ -1267,6 +1311,8 @@ export interface Frame {
   zombiesLeft: number;
   bossAlive: boolean;
   upgrades: Record<UpgradeId, number>;
+  /** Số bom tuyệt chiêu đang giữ */
+  bombs: number;
   /** Vị trí zombie đang bị khoá mục tiêu, `null` khi sân trống */
   lockedTarget: { x: number; y: number; radius: number } | null;
 }
@@ -1295,6 +1341,7 @@ export function snapshot(world: World): Frame {
     kills: world.kills,
     hp: world.player.hp,
     maxHp: world.player.maxHp,
+    bombs: world.player.bombs,
     weapon: world.weapon,
     ownedWeapons: [...world.ownedWeapons],
     status: world.status,
