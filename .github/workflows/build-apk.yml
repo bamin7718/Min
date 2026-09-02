@@ -501,6 +501,20 @@ jobs:
             Tải file **min-eg-app.apk** ở dưới, hoặc mở link tải cố định:
             <https://min-silk-iota.vercel.app/api/download-apk>
 
+            ### ⚠️ Đang dùng bản v1.0.1 thì phải GỠ APP trước khi cài
+
+            Từ bản này APK được ký bằng khoá phát hành riêng thay cho khoá công
+            khai đi kèm mẫu Expo, nên Android sẽ từ chối cài đè
+            (`INSTALL_FAILED_UPDATE_INCOMPATIBLE`).
+
+            **Gỡ app là xoá dữ liệu trên máy** — tài khoản, tiến độ học, mã PIN.
+            Trước khi gỡ, hãy vào **Góc Game → Phụ huynh → Đồng bộ ngay** để đẩy
+            tiến độ lên máy chủ, rồi đăng nhập lại sau khi cài xong để lấy về.
+
+            Các bản từ v1.0.8 trở đi sẽ cài đè lên nhau bình thường.
+
+            ---
+
             - Commit: ${{ github.sha }}
             - Build: lượt #${{ github.run_number }}
             - APK đã ký, hỗ trợ arm64-v8a và armeabi-v7a
