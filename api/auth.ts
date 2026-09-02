@@ -10,13 +10,14 @@ import {
   findUserByUsername,
   initDatabase,
   serverTursoConfig,
+  type UserRecord,
 } from '../lib/turso';
-import type { UserRole } from '../types';
+import { DEFAULT_AVATAR, DEFAULT_GRADE, sanitizeGrade } from '../types';
 
 /**
  * Đăng ký / đăng nhập.
  *
- * POST /api/auth?action=register  { username, password, role, pin? }
+ * POST /api/auth?action=register  { username, password, displayName, grade? }
  * POST /api/auth?action=login     { username, password }
  *
  * Toàn bộ việc băm mật khẩu và truy vấn bảng `users` diễn ra ở đây, nơi giữ
@@ -35,11 +36,30 @@ function json(body: unknown, status = 200): Response {
 
 // Cho phép cả dấu gạch ngang: người dùng hay gõ kiểu "minh-anh"
 const USERNAME_PATTERN = /^[a-zA-Z0-9_.-]{3,24}$/;
-const PIN_PATTERN = /^\d{4}$/;
 const MIN_PASSWORD = 6;
+const MIN_DISPLAY_NAME = 2;
+const MAX_DISPLAY_NAME = 48;
 
 function newId(): string {
   return crypto.randomUUID();
+}
+
+/**
+ * Phần thông tin tài khoản trả về cho client.
+ *
+ * KHÔNG bao giờ chứa `passwordHash` hay `pinHash` — chỉ có `hasPin` để app biết
+ * nên hiện "Nhập mã PIN" hay "Thiết lập mã PIN".
+ */
+function sessionUser(user: UserRecord) {
+  return {
+    userId: user.id,
+    username: user.username,
+    displayName: user.displayName,
+    grade: user.grade,
+    avatar: user.avatar,
+    role: user.role,
+    hasPin: user.pinHash !== null,
+  };
 }
 
 export default async function handler(request: Request): Promise<Response> {
@@ -83,11 +103,25 @@ export default async function handler(request: Request): Promise<Response> {
     await initDatabase(client);
 
     if (action === 'register') {
-      const role: UserRole = body.role === 'parent' ? 'parent' : 'student';
-      const pin = typeof body.pin === 'string' ? body.pin.trim() : '';
-
-      if (role === 'parent' && !PIN_PATTERN.test(pin)) {
-        return json({ error: 'Phụ huynh cần nhập mã PIN gồm đúng 4 chữ số.' }, 400);
+      /*
+       * KHÔNG còn nhận `role` và `pin` từ client.
+       *
+       * Màn hình Đăng ký đã bỏ phần chọn vai trò, nên mọi tài khoản mới là học
+       * sinh. Quan trọng hơn: nếu vẫn đọc `body.role` thì bất kỳ ai cũng có thể
+       * gửi `{"role":"parent"}` bằng curl để tự tạo tài khoản phụ huynh — chốt
+       * cứng ở server là cách duy nhất khiến điều đó bất khả.
+       *
+       * Mã PIN được đặt sau, trong Cài đặt (`/api/account?action=change-pin`).
+       */
+      const displayName =
+        typeof body.displayName === 'string' ? body.displayName.trim() : '';
+      if (displayName.length < MIN_DISPLAY_NAME || displayName.length > MAX_DISPLAY_NAME) {
+        return json(
+          {
+            error: `Họ và tên cần ${MIN_DISPLAY_NAME}-${MAX_DISPLAY_NAME} ký tự.`,
+          },
+          400,
+        );
       }
 
       const created = await createUser(
@@ -95,9 +129,12 @@ export default async function handler(request: Request): Promise<Response> {
         {
           id: newId(),
           username,
+          displayName,
+          grade: sanitizeGrade(body.grade ?? DEFAULT_GRADE),
+          avatar: DEFAULT_AVATAR,
           passwordHash: await hashSecret(password),
-          role,
-          pinHash: role === 'parent' ? await hashSecret(pin) : null,
+          role: 'student',
+          pinHash: null,
         },
         newId(),
       );
@@ -111,9 +148,7 @@ export default async function handler(request: Request): Promise<Response> {
 
       return json({
         session: {
-          userId: user.id,
-          username: user.username,
-          role: user.role,
+          ...sessionUser(user),
           token: await createSessionToken(user.id, secret),
         },
       });
@@ -134,9 +169,7 @@ export default async function handler(request: Request): Promise<Response> {
 
       return json({
         session: {
-          userId: user.id,
-          username: user.username,
-          role: user.role,
+          ...sessionUser(user),
           token: await createSessionToken(user.id, secret),
         },
       });

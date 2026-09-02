@@ -1,4 +1,4 @@
-import type { Question, WeekTopic } from '../types';
+import type { Question, WeekTopicSeed } from '../types';
 
 /**
  * Lộ trình Tiếng Việt Lớp 3 theo 35 tuần học.
@@ -23,7 +23,7 @@ const UNIT_3 = 'Quê hương đất nước';
 const UNIT_4 = 'Nghệ thuật & Sáng tạo';
 const UNIT_5 = 'Trái Đất màu xanh & Ôn tập cuối năm';
 
-export const VIETNAMESE_WEEKS: WeekTopic[] = [
+export const VIETNAMESE_WEEKS: WeekTopicSeed[] = [
   /* ============ TUẦN 1-4: MÁI TRƯỜNG EM YÊU ============ */
   {
     subject: 'Tiếng Việt',
@@ -5055,7 +5055,7 @@ export const VIETNAMESE_WEEKS: WeekTopic[] = [
 /* Hàm truy vấn                                                        */
 /* ------------------------------------------------------------------ */
 
-export function getVietnameseWeek(weekNumber: number): WeekTopic | undefined {
+export function getVietnameseWeek(weekNumber: number): WeekTopicSeed | undefined {
   return VIETNAMESE_WEEKS.find((week) => week.weekNumber === weekNumber);
 }
 

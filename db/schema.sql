@@ -8,11 +8,20 @@ PRAGMA foreign_keys = ON;
 
 CREATE TABLE IF NOT EXISTS users (
   id            TEXT PRIMARY KEY,
+  -- Tên đăng nhập. Là ID, KHÔNG đổi được sau khi tạo.
   username      TEXT NOT NULL UNIQUE,
+  -- Họ và tên, thứ hiện trên header app. Khác username: có dấu, có khoảng trắng.
+  display_name  TEXT NOT NULL DEFAULT '',
+  -- Khối lớp 1-12. Chỉ là dữ liệu hồ sơ: ngân hàng câu hỏi vẫn là Lớp 3.
+  grade         INTEGER NOT NULL DEFAULT 3,
+  -- Emoji avatar, chọn từ danh sách cố định trong types/index.ts
+  avatar        TEXT NOT NULL DEFAULT '',
   -- Định dạng: pbkdf2$<số vòng>$<salt base64>$<hash base64>
   password_hash TEXT NOT NULL,
+  -- Giữ lại cho các tài khoản tạo từ bản cũ. Tài khoản mới LUÔN là 'student';
+  -- quyền vào khu vực phụ huynh giờ dựa vào pin_code, không dựa vào cột này.
   role          TEXT NOT NULL CHECK (role IN ('student', 'parent')),
-  -- Chỉ phụ huynh có PIN; cũng băm chứ không lưu thô
+  -- Mã PIN mở khu vực phụ huynh, NULL = chưa đặt. Cũng băm chứ không lưu thô.
   pin_code      TEXT,
   created_at    TEXT NOT NULL
 );
@@ -38,6 +47,12 @@ CREATE TABLE IF NOT EXISTS user_progress (
   -- Map JSON môn -> tuần cao nhất đã qua, ví dụ {"Toán":9,"Tiếng Việt":4}.
   -- Dùng map để thêm lộ trình cho môn mới không phải đổi schema.
   completed_weeks          TEXT NOT NULL DEFAULT '{}',
+  -- JSON {"answered":n,"correct":n} cho báo cáo của phụ huynh. Chỉ lưu hai con
+  -- số này, số câu sai = answered - correct: giữ cả ba thì chỉ cần một lần cộng
+  -- lệch là ba số tự mâu thuẫn nhau.
+  answer_stats             TEXT NOT NULL DEFAULT '{}',
+  -- JSON {"dailyLimitMinutes":n,"rewardMultiplier":n} do phụ huynh đặt
+  parent_settings          TEXT NOT NULL DEFAULT '{}',
   updated_at               TEXT NOT NULL,
   UNIQUE (user_id, subject)
 );

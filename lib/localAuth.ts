@@ -1,6 +1,14 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
-import type { AuthSession, SyncResult, UserRole } from '../types';
+import {
+  DEFAULT_AVATAR,
+  DEFAULT_GRADE,
+  sanitizeAvatar,
+  sanitizeGrade,
+  type AuthSession,
+  type SyncResult,
+  type UserRole,
+} from '../types';
 import {
   fromHex,
   pbkdf2Sha256,
@@ -40,9 +48,20 @@ const HASH_PREFIX = 'pbkdf2local';
 interface LocalAccount {
   userId: string;
   username: string;
+  /** Họ và tên. Bản ghi cũ không có trường này nên phải đọc phòng hờ. */
+  displayName?: string;
+  grade?: number;
+  avatar?: string;
   role: UserRole;
   passwordHash: string;
-  /** Chỉ tài khoản phụ huynh mới có mã PIN */
+  /**
+   * Mã PIN mở khu vực phụ huynh.
+   *
+   * `null` = chưa đặt. Từ bản 1.0.8, MỌI tài khoản đều đặt được PIN (trước đây
+   * chỉ tài khoản vai trò `parent` mới có) — vì màn hình Đăng ký không còn cho
+   * chọn vai trò, nên nếu vẫn buộc phải là `parent` thì sẽ không tài khoản mới
+   * nào mở được khu vực phụ huynh.
+   */
   pinHash: string | null;
   /** Chuỗi ngẫu nhiên đại diện cho phiên đăng nhập trên máy này */
   token: string;
@@ -126,7 +145,15 @@ function validatePassword(password: string): string | null {
 }
 
 function validatePin(pin: string): string | null {
-  if (!/^\d{4,8}$/.test(pin)) return 'Mã PIN cần 4-8 chữ số.';
+  if (!/^\d{4}$/.test(pin)) return 'Mã PIN cần đúng 4 chữ số.';
+  return null;
+}
+
+/** Họ và tên: cho phép chữ có dấu và khoảng trắng, khác hẳn tên đăng nhập */
+function validateDisplayName(name: string): string | null {
+  const trimmed = name.trim();
+  if (trimmed.length < 2) return 'Họ và tên cần ít nhất 2 kí tự.';
+  if (trimmed.length > 48) return 'Họ và tên không quá 48 kí tự.';
   return null;
 }
 
@@ -134,7 +161,11 @@ function toSession(account: LocalAccount): AuthSession {
   return {
     userId: account.userId,
     username: account.username,
+    displayName: account.displayName?.trim() || account.username,
+    grade: sanitizeGrade(account.grade),
+    avatar: sanitizeAvatar(account.avatar),
     role: account.role,
+    hasPin: account.pinHash !== null,
     token: account.token,
   };
 }
@@ -143,24 +174,26 @@ function toSession(account: LocalAccount): AuthSession {
 /* Các hàm công khai — trùng chữ ký với lib/authApi.ts                 */
 /* ------------------------------------------------------------------ */
 
-export async function registerAccountLocal(input: {
+export interface RegisterInput {
   username: string;
   password: string;
-  role: UserRole;
-  pin?: string;
-}): Promise<SyncResult<AuthSession>> {
+  /** Họ và tên hiển thị */
+  displayName: string;
+  /** Khối lớp 1-12 */
+  grade?: number;
+}
+
+export async function registerAccountLocal(
+  input: RegisterInput,
+): Promise<SyncResult<AuthSession>> {
   const username = normalizeUsername(input.username);
 
   const usernameError = validateUsername(username);
   if (usernameError) return { ok: false, error: usernameError };
+  const nameError = validateDisplayName(input.displayName);
+  if (nameError) return { ok: false, error: nameError };
   const passwordError = validatePassword(input.password);
   if (passwordError) return { ok: false, error: passwordError };
-
-  if (input.role === 'parent') {
-    if (!input.pin) return { ok: false, error: 'Tài khoản phụ huynh cần đặt mã PIN.' };
-    const pinError = validatePin(input.pin);
-    if (pinError) return { ok: false, error: pinError };
-  }
 
   const accounts = await readAccounts();
   if (accounts.some((a) => a.username === username)) {
@@ -170,9 +203,14 @@ export async function registerAccountLocal(input: {
   const account: LocalAccount = {
     userId: `local-${toHex(randomBytes(8))}`,
     username,
-    role: input.role,
+    displayName: input.displayName.trim(),
+    grade: sanitizeGrade(input.grade ?? DEFAULT_GRADE),
+    avatar: DEFAULT_AVATAR,
+    // Đăng ký không còn chọn vai trò: mọi tài khoản mới là học sinh, và khu vực
+    // phụ huynh mở bằng mã PIN đặt sau trong Cài đặt.
+    role: 'student',
     passwordHash: await hashSecret(input.password),
-    pinHash: input.role === 'parent' && input.pin ? await hashSecret(input.pin) : null,
+    pinHash: null,
     token: newToken(),
     createdAt: new Date().toISOString(),
   };
@@ -212,26 +250,45 @@ async function findByToken(
   return account ? { accounts, account } : null;
 }
 
-export async function renameAccountLocal(
+export interface ProfilePatch {
+  displayName?: string;
+  grade?: number;
+  avatar?: string;
+}
+
+/**
+ * Cập nhật hồ sơ: họ tên, khối lớp, avatar.
+ *
+ * KHÔNG đổi được `username`: nó là ID đăng nhập, cũng là khoá tra tài khoản, và
+ * màn hình Cài đặt hiện nó ở dạng chỉ đọc kèm icon khoá. Muốn đổi tên hiển thị
+ * thì sửa `displayName` — đó mới là thứ hiện trên header.
+ */
+export async function updateProfileLocal(
   token: string,
-  username: string,
-): Promise<SyncResult<string>> {
-  const next = normalizeUsername(username);
-  const error = validateUsername(next);
-  if (error) return { ok: false, error };
+  patch: ProfilePatch,
+): Promise<SyncResult<AuthSession>> {
+  if (patch.displayName !== undefined) {
+    const error = validateDisplayName(patch.displayName);
+    if (error) return { ok: false, error };
+  }
 
   const found = await findByToken(token);
   if (!found) return { ok: false, error: 'Phiên đăng nhập đã hết hiệu lực.' };
 
-  if (found.accounts.some((a) => a.username === next && a.userId !== found.account.userId)) {
-    return { ok: false, error: 'Tên đăng nhập này đã có người dùng trên máy.' };
-  }
-
-  const updated = { ...found.account, username: next };
+  const updated: LocalAccount = {
+    ...found.account,
+    displayName:
+      patch.displayName !== undefined
+        ? patch.displayName.trim()
+        : found.account.displayName,
+    grade: patch.grade !== undefined ? sanitizeGrade(patch.grade) : found.account.grade,
+    avatar:
+      patch.avatar !== undefined ? sanitizeAvatar(patch.avatar) : found.account.avatar,
+  };
   await writeAccounts(
     found.accounts.map((a) => (a.userId === updated.userId ? updated : a)),
   );
-  return { ok: true, data: next };
+  return { ok: true, data: toSession(updated) };
 }
 
 export async function verifyPinLocal(
@@ -259,9 +316,12 @@ export async function changePinLocal(
 
   const found = await findByToken(token);
   if (!found) return { ok: false, error: 'Phiên đăng nhập đã hết hiệu lực.' };
-  if (found.account.role !== 'parent') {
-    return { ok: false, error: 'Chỉ tài khoản phụ huynh mới đổi được mã PIN.' };
-  }
+  /*
+   * KHÔNG còn chặn theo vai trò. Trước đây chỉ tài khoản `parent` mới đổi được
+   * PIN, nhưng màn hình Đăng ký đã bỏ phần chọn vai trò nên mọi tài khoản mới
+   * đều là `student` — giữ ràng buộc cũ thì không ai đặt được PIN và khu vực
+   * phụ huynh thành ra không bao giờ mở được.
+   */
   // Đã có PIN thì phải nhập đúng PIN cũ; chưa có thì cho đặt mới luôn
   if (found.account.pinHash && !(await verifySecret(oldPin, found.account.pinHash))) {
     return { ok: false, error: 'Mã PIN cũ không đúng.' };

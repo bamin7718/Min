@@ -59,6 +59,7 @@ export default function GameVaultScreen() {
     pausePlaying,
     hydrated,
     isOnline,
+    dailyLimitReached,
   } = usePlaytime();
 
   // Hiệu ứng "thở" của đồng hồ khi đang chạy
@@ -87,9 +88,6 @@ export default function GameVaultScreen() {
     loop.start();
     return () => loop.stop();
   }, [isPlaying, pulseAnim]);
-
-  const { session } = useAuth();
-  const isParent = session?.role === 'parent';
 
   const goToQuiz = useCallback(() => navigation.navigate('HocTap'), [navigation]);
 
@@ -167,17 +165,19 @@ export default function GameVaultScreen() {
             {hydrated ? formatClock(availableSeconds) : '--:--'}
           </Text>
           <Text style={styles.clockHint}>
-            {isLocked
-              ? 'Đã hết giờ — hãy học bài để kiếm thêm'
-              : isPlaying
-                ? 'Đang chơi... thời gian đang chạy!'
-                : `Còn khoảng ${availableMinutes} phút, sẵn sàng chơi`}
+            {dailyLimitReached
+              ? 'Hết hạn mức hôm nay — mai chơi tiếp nhé'
+              : isLocked
+                ? 'Đã hết giờ — hãy học bài để kiếm thêm'
+                : isPlaying
+                  ? 'Đang chơi... thời gian đang chạy!'
+                  : `Còn khoảng ${availableMinutes} phút, sẵn sàng chơi`}
           </Text>
         </Animated.View>
 
         {/* ----- Hết giờ: khoá lại. Còn giờ: hiện lưới trò chơi ----- */}
         {!hydrated ? null : isLocked ? (
-          <LockedPanel onGoToQuiz={goToQuiz} />
+          <LockedPanel onGoToQuiz={goToQuiz} dailyLimit={dailyLimitReached} />
         ) : (
           <>
             <GameGrid onOpenGame={openGame} />
@@ -218,11 +218,16 @@ export default function GameVaultScreen() {
         )}
 
         {/*
-          Khu vực phụ huynh KHÔNG được render với tài khoản học sinh — không
-          phải chỉ ẩn bằng CSS. Học sinh chỉ thấy số phút kiếm được và danh
-          sách game.
+          Lời nhắc cho con, rồi tới khu vực phụ huynh.
+
+          Trước đây khu vực phụ huynh chỉ render khi `session.role === 'parent'`.
+          Từ khi đăng ký bỏ phần chọn vai trò, mọi tài khoản đều là `student` nên
+          điều kiện đó khiến không ai cấp thêm giờ được nữa. Thứ bảo vệ bây giờ là
+          mã PIN: `ParentPanel` tự hỏi PIN và các nút cấp giờ / đặt lại tiến độ
+          chỉ được RENDER sau khi nhập đúng, không phải ẩn bằng style.
         */}
-        {isParent ? <ParentPanel /> : <StudentNote />}
+        <StudentNote />
+        <ParentPanel />
       </ScrollView>
 
       {/* ----- Trò chơi mở toàn màn hình ----- */}
@@ -293,23 +298,42 @@ const GameGrid = React.memo(function GameGrid({
 /* Bảng thông báo khi hết giờ                                          */
 /* ------------------------------------------------------------------ */
 
-function LockedPanel({ onGoToQuiz }: { onGoToQuiz: () => void }) {
+/**
+ * @param dailyLimit `true` khi khoá vì hết HẠN MỨC NGÀY, không phải vì hết phút
+ *   trong ví. Hai trường hợp cần hai câu khác nhau: hết hạn mức ngày thì làm
+ *   thêm bài cũng không chơi được nữa, mời con học tiếp là nói sai.
+ */
+function LockedPanel({
+  onGoToQuiz,
+  dailyLimit,
+}: {
+  onGoToQuiz: () => void;
+  dailyLimit: boolean;
+}) {
   return (
     <View style={styles.lockedCard}>
       <Text style={styles.lockedEmoji}>🔒</Text>
-      <Text style={styles.lockedTitle}>Hết giờ chơi rồi!</Text>
+      <Text style={styles.lockedTitle}>
+        {dailyLimit ? 'Hết hạn mức hôm nay!' : 'Hết giờ chơi rồi!'}
+      </Text>
       <Text style={styles.lockedMessage}>
-        Hãy làm bài tập Lớp 3 để kiếm thêm phút chơi game.
+        {dailyLimit
+          ? 'Bố mẹ đặt hạn mức chơi mỗi ngày. Phút con kiếm được vẫn giữ nguyên, mai chơi tiếp nhé!'
+          : 'Hãy làm bài tập Lớp 3 để kiếm thêm phút chơi game.'}
       </Text>
 
       <Pressable
         onPress={onGoToQuiz}
         accessibilityRole="button"
-        accessibilityLabel="Học tiếp để kiếm thêm phút chơi game"
+        accessibilityLabel={
+          dailyLimit ? 'Sang mục Học Tập' : 'Học tiếp để kiếm thêm phút chơi game'
+        }
         style={({ pressed }) => [styles.lockedButton, pressed && styles.pressed]}
       >
         <Text style={styles.lockedButtonEmoji}>📚</Text>
-        <Text style={styles.lockedButtonText}>Học tiếp kiếm phút</Text>
+        <Text style={styles.lockedButtonText}>
+          {dailyLimit ? 'Sang học bài' : 'Học tiếp kiếm phút'}
+        </Text>
         <Ionicons name="arrow-forward" size={20} color={colors.textOnPrimary} />
       </Pressable>
     </View>

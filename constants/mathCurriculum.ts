@@ -1,4 +1,4 @@
-import type { Question, WeekStatus, WeekTopic } from '../types';
+import type { Question, WeekStatus, WeekTopic, WeekTopicSeed } from '../types';
 
 /**
  * Lộ trình Toán Lớp 3 theo 35 tuần học (Chương trình GDPT 2018).
@@ -46,7 +46,7 @@ const UNIT_3 = 'Nhân, chia số có 2-3 chữ số với số có một chữ s
 const UNIT_4 = 'Các số đến 10 000 & phép tính trong phạm vi 10 000';
 const UNIT_5 = 'Các số đến 100 000, diện tích & ôn tập cuối năm';
 
-export const MATH_WEEKS: WeekTopic[] = [
+export const MATH_WEEKS: WeekTopicSeed[] = [
   /* ============ GIAI ĐOẠN 1: TUẦN 1-4 ============ */
   {
     subject: 'Toán',
@@ -4942,8 +4942,14 @@ export const MATH_WEEKS: WeekTopic[] = [
 /* Hàm truy vấn                                                        */
 /* ------------------------------------------------------------------ */
 
-/** Lấy thông tin một tuần theo số tuần */
-export function getWeek(weekNumber: number): WeekTopic | undefined {
+/**
+ * Lấy thông tin một tuần theo số tuần.
+ *
+ * Trả về `WeekTopicSeed` (không có `grade`) vì đây là tệp dữ liệu thô của Lớp 3.
+ * Muốn có `grade` thì dùng `getCurriculumWeek(grade, subject, week)` trong
+ * `constants/curriculum.ts` — nơi khối lớp được gắn vào.
+ */
+export function getWeek(weekNumber: number): WeekTopicSeed | undefined {
   return MATH_WEEKS.find((week) => week.weekNumber === weekNumber);
 }
 

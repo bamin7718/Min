@@ -62,7 +62,7 @@ export const SUBJECTS: SubjectInfo[] = [
  * trùng id.
  *
  * LƯU Ý: không đổi `id` của câu đã có, vì `masteredQuestionIds` lưu trong
- * AsyncStorage/Supabase tham chiếu tới các id này.
+ * AsyncStorage và Turso DB tham chiếu tới các id này.
  */
 const LANGUAGE_QUESTIONS: Question[] = [
   /* ==================== TIẾNG ANH ==================== */

@@ -12,12 +12,14 @@ import {
   isApiConfigured,
   loginAccount,
   registerAccount,
-  renameAccount,
+  updateProfile,
   verifyParentPinRemote,
+  type ProfilePatch,
+  type RegisterInput,
 } from '../lib/authApi';
 import { clearSession, loadSession, saveSession } from '../lib/session';
 import { loadAppLock, saveAppLock } from '../lib/session';
-import type { AuthSession, UserRole } from '../types';
+import type { AuthSession } from '../types';
 
 export interface AuthActionResult {
   ok: boolean;
@@ -32,19 +34,20 @@ interface AuthContextValue {
   /** Tài khoản đang đăng nhập, `null` nếu chưa */
   session: AuthSession | null;
   signIn: (username: string, password: string) => Promise<AuthActionResult>;
-  signUp: (input: {
-    username: string;
-    password: string;
-    role: UserRole;
-    pin?: string;
-  }) => Promise<AuthActionResult>;
+  /** Đăng ký. Không có tham số vai trò: tài khoản mới luôn là học sinh. */
+  signUp: (input: RegisterInput) => Promise<AuthActionResult>;
   signOut: () => Promise<void>;
 
-  /** Đổi tên hiển thị; cập nhật cả session đã lưu */
-  updateUserName: (username: string) => Promise<AuthActionResult>;
+  /** Cập nhật hồ sơ (họ tên / khối lớp / avatar); cập nhật cả session đã lưu */
+  updateProfile: (patch: ProfilePatch) => Promise<AuthActionResult>;
   /** Kiểm tra mã PIN phụ huynh (xác thực ở server) */
   verifyPin: (pin: string) => Promise<AuthActionResult>;
-  /** Đổi mã PIN phụ huynh */
+  /**
+   * Đặt hoặc đổi mã PIN phụ huynh.
+   *
+   * Chưa có PIN thì `oldPin` bị bỏ qua — đây chính là luồng "thiết lập PIN" lần
+   * đầu, vì tài khoản đăng ký mới không còn được đặt PIN ngay lúc tạo.
+   */
   changePin: (oldPin: string, newPin: string) => Promise<AuthActionResult>;
 
   /**
@@ -97,12 +100,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   );
 
   const signUp = useCallback(
-    async (input: {
-      username: string;
-      password: string;
-      role: UserRole;
-      pin?: string;
-    }): Promise<AuthActionResult> => {
+    async (input: RegisterInput): Promise<AuthActionResult> => {
       const result = await registerAccount(input);
       if (!result.ok) return { ok: false, error: result.error };
 
@@ -119,16 +117,15 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     setPinUnlocked(false);
   }, []);
 
-  const updateUserName = useCallback(
-    async (username: string): Promise<AuthActionResult> => {
+  const updateProfileAction = useCallback(
+    async (patch: ProfilePatch): Promise<AuthActionResult> => {
       if (!session) return { ok: false, error: 'Chưa đăng nhập.' };
 
-      const result = await renameAccount(session.token, username);
+      const result = await updateProfile(session.token, patch);
       if (!result.ok) return { ok: false, error: result.error };
 
-      const next = { ...session, username: result.data };
-      await saveSession(next);
-      setSession(next);
+      await saveSession(result.data);
+      setSession(result.data);
       return { ok: true };
     },
     [session],
@@ -152,7 +149,18 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       if (!session) return { ok: false, error: 'Chưa đăng nhập.' };
 
       const result = await changeParentPin(session.token, oldPin, newPin);
-      return result.ok ? { ok: true } : { ok: false, error: result.error };
+      if (!result.ok) return { ok: false, error: result.error };
+
+      // Đặt PIN lần đầu thì phải ghi lại vào phiên, nếu không màn hình Cài đặt
+      // vẫn hiện "Thiết lập mã PIN" dù đã đặt xong.
+      if (!session.hasPin) {
+        const next = { ...session, hasPin: true };
+        await saveSession(next);
+        setSession(next);
+      }
+      // Vừa đặt/đổi PIN thì coi như đã xác thực trong phiên này
+      setPinUnlocked(true);
+      return { ok: true };
     },
     [session],
   );
@@ -170,7 +178,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       signIn,
       signUp,
       signOut,
-      updateUserName,
+      updateProfile: updateProfileAction,
       verifyPin,
       changePin,
       pinUnlocked,
@@ -184,7 +192,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       signIn,
       signUp,
       signOut,
-      updateUserName,
+      updateProfileAction,
       verifyPin,
       changePin,
       pinUnlocked,

@@ -25,7 +25,18 @@ import {
 } from '../lib/storage';
 import { syncEngine, type EngineState } from '../lib/syncEngine';
 import {
+  DEFAULT_PARENT_SETTINGS,
+  EMPTY_ANSWER_STATS,
   EMPTY_WEEK_PROGRESS,
+  sanitizeAnswerStats,
+  sanitizeDailyUsage,
+  sanitizeParentSettings,
+  sanitizeWeekProgress,
+  todayKey,
+  weekKey,
+  type AnswerStats,
+  type DailyUsage,
+  type ParentSettings,
   type ProgressSyncPayload,
   type Question,
   type StoredProgress,
@@ -41,7 +52,7 @@ import { useAuth } from './AuthContext';
 const MAX_ACCUMULATED_SECONDS = MAX_ACCUMULATED_MINUTES * 60;
 
 /**
- * Khoảng cách tối thiểu giữa hai lần đẩy dữ liệu lên Supabase.
+ * Khoảng cách tối thiểu giữa hai lần đẩy dữ liệu lên Turso DB.
  * Trong lúc đồng hồ chạy, tiến độ đổi mỗi giây nên cần throttle thay vì debounce
  * (debounce sẽ không bao giờ kịp chạy).
  */
@@ -86,7 +97,15 @@ interface PlaytimeContextValue {
   masteredQuestionIds: string[];
   /** Tuần cao nhất đã vượt qua của từng môn (0 = chưa qua tuần nào) */
   completedWeeks: SubjectWeekProgress;
-  /** Tiến độ ở dạng công khai, dùng để đồng bộ Supabase */
+  /** Số câu đã làm và số câu đúng — nguồn của báo cáo trong Cài đặt */
+  answerStats: AnswerStats;
+  /** Hạn mức ngày và hệ số thưởng do phụ huynh đặt */
+  parentSettings: ParentSettings;
+  /** Số giây còn được chơi trong hôm nay. `Infinity` khi không đặt hạn mức. */
+  remainingTodaySeconds: number;
+  /** `true` khi đã dùng hết hạn mức của ngày hôm nay */
+  dailyLimitReached: boolean;
+  /** Tiến độ ở dạng công khai, dùng để đồng bộ lên Turso DB */
   progress: UserProgress;
 
   /** Ghi nhận câu trả lời, cộng điểm và quy đổi ra phút chơi game */
@@ -106,10 +125,12 @@ interface PlaytimeContextValue {
    * server. Màn hình gọi hàm này phải tự đảm bảo đã mở khoá trước.
    */
   grantMinutesByParent: (minutes: number) => boolean;
+  /** Lưu cấu hình của phụ huynh (hạn mức ngày, hệ số phút thưởng) */
+  saveParentSettings: (settings: ParentSettings) => void;
   /** Xoá toàn bộ tiến độ của tài khoản hiện tại */
   resetProgress: () => boolean;
 
-  // ----- Đồng bộ Supabase -----
+  // ----- Đồng bộ Turso DB -----
   syncState: SyncState;
   syncError: string | null;
   /** Thiết bị có mạng hay không (theo NetInfo) */
@@ -124,15 +145,27 @@ interface PlaytimeContextValue {
 
 const PlaytimeContext = createContext<PlaytimeContextValue | null>(null);
 
-/** Ép map tiến độ về khoảng hợp lệ và luôn đủ ba môn */
-function sanitizeWeeks(raw: Partial<SubjectWeekProgress> | undefined): SubjectWeekProgress {
-  const result = { ...EMPTY_WEEK_PROGRESS };
-  if (!raw) return result;
+/**
+ * Ép map tiến độ về khoảng hợp lệ.
+ *
+ * `sanitizeWeekProgress` lo phần dạng khoá (và nâng khoá cũ lên dạng có khối
+ * lớp); ở đây kẹp thêm theo **số tuần thật của từng lộ trình**, việc mà hàm dùng
+ * chung trong `types/` không làm được vì nó không được phép import curriculum.
+ * Nhờ bước này, một bản ghi ghi "tuần 20" cho Lớp 1 (chỉ có 6 tuần) sẽ bị đưa về
+ * 6 thay vì mở khoá những tuần không tồn tại.
+ */
+function sanitizeWeeks(raw: unknown): SubjectWeekProgress {
+  const cleaned = sanitizeWeekProgress(raw);
+  const result: SubjectWeekProgress = {};
 
-  for (const subject of Object.keys(result) as Subject[]) {
-    const value = Number(raw[subject]);
-    if (!Number.isFinite(value)) continue;
-    result[subject] = Math.min(totalWeeks(subject), Math.max(0, Math.floor(value)));
+  for (const [key, value] of Object.entries(cleaned)) {
+    const separator = key.indexOf(':');
+    const grade = Number(key.slice(0, separator));
+    const subject = key.slice(separator + 1) as Subject;
+    const max = totalWeeks(grade, subject);
+    // Môn không có lộ trình ở lớp đó thì bỏ hẳn khoá, không giữ số vô nghĩa
+    if (max === 0) continue;
+    result[key] = Math.min(max, value);
   }
   return result;
 }
@@ -142,7 +175,7 @@ function clampSeconds(value: number): number {
   return Math.min(Math.max(value, 0), MAX_ACCUMULATED_SECONDS);
 }
 
-/** So sánh hai mốc thời gian ISO. Supabase trả về "+00:00" còn `Date` trả "Z". */
+/** So sánh hai mốc thời gian ISO. Turso DB trả về "+00:00" còn `Date` trả "Z". */
 function isNewer(candidate: string, reference: string): boolean {
   const a = Date.parse(candidate);
   const b = Date.parse(reference);
@@ -169,11 +202,27 @@ export function PlaytimeProvider({ children }: { children: React.ReactNode }) {
   const [completedWeeks, setCompletedWeeks] = useState<SubjectWeekProgress>(
     EMPTY_WEEK_PROGRESS,
   );
+  const [answerStats, setAnswerStats] = useState<AnswerStats>(EMPTY_ANSWER_STATS);
+  const [parentSettings, setParentSettings] = useState<ParentSettings>(
+    DEFAULT_PARENT_SETTINGS,
+  );
+  /**
+   * Số giây đã chơi trong ngày hôm nay.
+   *
+   * KHÔNG đồng bộ lên server, khác ba trường trên. Tiến độ được đẩy lên dưới
+   * dạng ảnh chụp toàn phần với luật "mốc mới nhất thắng", nên nếu đồng bộ thì
+   * hai máy chơi song song sẽ liên tục ghi đè số giây của nhau và hạn mức ngày
+   * thành ra vô nghĩa. Đánh đổi đã biết: hạn mức tính riêng cho từng máy, con
+   * đổi sang máy khác là được thêm một hạn mức nữa.
+   */
+  const [dailyUsage, setDailyUsage] = useState<DailyUsage>(() =>
+    sanitizeDailyUsage(null, new Date()),
+  );
   const [isPlaying, setIsPlaying] = useState(false);
 
   /**
    * Mốc cập nhật của dữ liệu cục bộ. `null` = máy này chưa từng lưu gì
-   * (mới cài), khi đó dữ liệu trên Supabase luôn được ưu tiên.
+   * (mới cài), khi đó dữ liệu trên Turso DB luôn được ưu tiên.
    */
   const [lastUpdated, setLastUpdated] = useState<string | null>(null);
 
@@ -189,6 +238,8 @@ export function PlaytimeProvider({ children }: { children: React.ReactNode }) {
     availableSeconds,
     masteredQuestionIds,
     completedWeeks,
+    answerStats,
+    parentSettings,
     lastUpdated,
   });
   stateRef.current = {
@@ -196,6 +247,8 @@ export function PlaytimeProvider({ children }: { children: React.ReactNode }) {
     availableSeconds,
     masteredQuestionIds,
     completedWeeks,
+    answerStats,
+    parentSettings,
     lastUpdated,
   };
 
@@ -207,26 +260,28 @@ export function PlaytimeProvider({ children }: { children: React.ReactNode }) {
     let cancelled = false;
 
     // Chưa đăng nhập: không có dữ liệu nào để hiển thị
-    if (!currentUserId) {
+    /** Đưa mọi state về mặc định — dùng cho cả lúc đăng xuất và lúc đổi tài khoản */
+    const clearAll = () => {
       setHydrated(false);
       setTotalPoints(0);
       setAvailableSeconds(0);
       setMasteredQuestionIds([]);
       setCompletedWeeks(EMPTY_WEEK_PROGRESS);
+      setAnswerStats(EMPTY_ANSWER_STATS);
+      setParentSettings(DEFAULT_PARENT_SETTINGS);
+      setDailyUsage(sanitizeDailyUsage(null, new Date()));
       setLastUpdated(null);
       setIsPlaying(false);
+    };
+
+    if (!currentUserId) {
+      clearAll();
       return;
     }
 
     // Xoá sạch state của tài khoản trước rồi mới nạp tài khoản mới,
     // để không có khoảnh khắc nào hiện điểm/giờ của người khác.
-    setHydrated(false);
-    setTotalPoints(0);
-    setAvailableSeconds(0);
-    setMasteredQuestionIds([]);
-    setCompletedWeeks(EMPTY_WEEK_PROGRESS);
-    setLastUpdated(null);
-    setIsPlaying(false);
+    clearAll();
 
     (async () => {
       try {
@@ -237,6 +292,10 @@ export function PlaytimeProvider({ children }: { children: React.ReactNode }) {
           setAvailableSeconds(clampSeconds(saved.availableSeconds));
           setMasteredQuestionIds(saved.masteredQuestionIds);
           setCompletedWeeks(sanitizeWeeks(saved.completedWeeks));
+          setAnswerStats(sanitizeAnswerStats(saved.answerStats));
+          setParentSettings(sanitizeParentSettings(saved.parentSettings));
+          // Bản ghi của ngày hôm qua bị bỏ, hạn mức tính lại từ đầu mỗi ngày
+          setDailyUsage(sanitizeDailyUsage(saved.dailyUsage, new Date()));
           setLastUpdated(saved.lastUpdated);
         }
       } catch (error) {
@@ -257,11 +316,14 @@ export function PlaytimeProvider({ children }: { children: React.ReactNode }) {
 
     const timeoutId = setTimeout(() => {
       const snapshot: StoredProgress = {
-        version: 1,
+        version: 2,
         totalPoints,
         availableSeconds,
         masteredQuestionIds,
         completedWeeks,
+        answerStats,
+        parentSettings,
+        dailyUsage,
         lastUpdated,
       };
 
@@ -270,12 +332,15 @@ export function PlaytimeProvider({ children }: { children: React.ReactNode }) {
 
       // 2) Xếp vào hàng đợi để engine đẩy lên server sau. Không await, nên
       //    dù đang offline UI cũng không hề chờ.
+      //    `dailyUsage` KHÔNG có trong payload — xem ghi chú ở chỗ khai state.
       if (isApiConfigured && sessionToken) {
         syncEngine.queueProgress(currentUserId, sessionToken, {
           totalPoints,
           accumulatedGameMinutes: Math.floor(availableSeconds / 60),
           masteredQuestionIds,
           completedWeeks,
+          answerStats,
+          parentSettings,
           lastUpdated,
         });
       }
@@ -288,6 +353,9 @@ export function PlaytimeProvider({ children }: { children: React.ReactNode }) {
     availableSeconds,
     masteredQuestionIds,
     completedWeeks,
+    answerStats,
+    parentSettings,
+    dailyUsage,
     lastUpdated,
     currentUserId,
     sessionToken,
@@ -308,18 +376,36 @@ export function PlaytimeProvider({ children }: { children: React.ReactNode }) {
       const elapsed = (now - lastTickRef.current) / 1000;
       lastTickRef.current = now;
       setAvailableSeconds((prev) => Math.max(0, prev - elapsed));
+
+      // Cùng số giây đó cũng được tính vào hạn mức của ngày hôm nay
+      setDailyUsage((prev) => {
+        const today = todayKey(new Date(now));
+        // Chơi qua nửa đêm: sang ngày mới thì hạn mức tính lại từ 0
+        return prev.day === today
+          ? { day: today, secondsPlayed: prev.secondsPlayed + elapsed }
+          : { day: today, secondsPlayed: elapsed };
+      });
       touch();
     }, 1000);
 
     return () => clearInterval(intervalId);
   }, [isPlaying, touch]);
 
-  // Hết thời gian → tự động dừng và khoá
+  /** Trần giây của ngày. `Infinity` khi phụ huynh không đặt hạn mức. */
+  const dailyLimitSeconds =
+    parentSettings.dailyLimitMinutes > 0
+      ? parentSettings.dailyLimitMinutes * 60
+      : Number.POSITIVE_INFINITY;
+
+  const remainingTodaySeconds = Math.max(0, dailyLimitSeconds - dailyUsage.secondsPlayed);
+  const dailyLimitReached = remainingTodaySeconds <= 0;
+
+  // Hết ví thời gian HOẶC hết hạn mức ngày → tự động dừng và khoá
   useEffect(() => {
-    if (isPlaying && availableSeconds <= 0) {
+    if (isPlaying && (availableSeconds <= 0 || dailyLimitReached)) {
       setIsPlaying(false);
     }
-  }, [isPlaying, availableSeconds]);
+  }, [isPlaying, availableSeconds, dailyLimitReached]);
 
   // Rời khỏi ứng dụng thì tạm dừng để không "cháy" thời gian oan.
   useEffect(() => {
@@ -382,6 +468,8 @@ export function PlaytimeProvider({ children }: { children: React.ReactNode }) {
     setAvailableSeconds(clampSeconds(remote.accumulatedGameMinutes * 60));
     setMasteredQuestionIds(remote.masteredQuestionIds);
     setCompletedWeeks(sanitizeWeeks(remote.completedWeeks));
+    setAnswerStats(sanitizeAnswerStats(remote.answerStats));
+    setParentSettings(sanitizeParentSettings(remote.parentSettings));
     setLastUpdated(remote.lastUpdated);
   }, []);
 
@@ -414,7 +502,16 @@ export function PlaytimeProvider({ children }: { children: React.ReactNode }) {
     (question: Question, selectedAnswer: number): RewardOutcome => {
       const isCorrect = selectedAnswer === question.correctAnswer;
 
+      // Đếm MỌI câu đã trả lời, kể cả câu sai và câu làm lại: đây là nguồn duy
+      // nhất cho báo cáo "đúng / sai" của phụ huynh. `masteredQuestionIds` không
+      // dùng được vì nó chỉ giữ id câu đã đúng, không biết gì về câu sai.
+      setAnswerStats((prev) => ({
+        answered: prev.answered + 1,
+        correct: prev.correct + (isCorrect ? 1 : 0),
+      }));
+
       if (!isCorrect) {
+        touch();
         return {
           isCorrect: false,
           pointsEarned: 0,
@@ -424,8 +521,11 @@ export function PlaytimeProvider({ children }: { children: React.ReactNode }) {
       }
 
       const alreadyMastered = masteredQuestionIds.includes(question.id);
-      const minutesEarned =
+      const baseMinutes =
         alreadyMastered && !REPEAT_ANSWER_GIVES_MINUTES ? 0 : question.rewardMinutes;
+      // Hệ số phụ huynh đặt. Làm tròn xuống để không bao giờ tặng thêm phút do
+      // số lẻ, giống cách `availableMinutes` dùng `floor`.
+      const minutesEarned = Math.floor(baseMinutes * parentSettings.rewardMultiplier);
       // Chỉ câu đúng LẦN ĐẦU mới sinh phần thưởng
       const pointsEarned =
         alreadyMastered && !REPEAT_ANSWER_GIVES_POINTS ? 0 : POINTS_PER_CORRECT;
@@ -441,13 +541,13 @@ export function PlaytimeProvider({ children }: { children: React.ReactNode }) {
 
       return { isCorrect: true, pointsEarned, minutesEarned, alreadyMastered };
     },
-    [masteredQuestionIds, touch],
+    [masteredQuestionIds, parentSettings.rewardMultiplier, touch],
   );
 
   const startPlaying = useCallback(() => {
-    // Chỉ cho chạy đồng hồ khi còn thời gian tích luỹ
-    if (availableSeconds > 0) setIsPlaying(true);
-  }, [availableSeconds]);
+    // Cần cả hai: còn thời gian trong ví VÀ chưa hết hạn mức của ngày hôm nay
+    if (availableSeconds > 0 && !dailyLimitReached) setIsPlaying(true);
+  }, [availableSeconds, dailyLimitReached]);
 
   const pausePlaying = useCallback(() => setIsPlaying(false), []);
 
@@ -462,7 +562,11 @@ export function PlaytimeProvider({ children }: { children: React.ReactNode }) {
 
       // Chỉ thưởng và mở khoá ở lần ĐẦU vượt qua tuần, để làm lại tuần cũ
       // không thể cộng phút chơi game vô hạn.
-      const done = completedWeeks[week.subject] ?? 0;
+      //
+      // Khoá gồm cả khối lớp: tuần 3 của Lớp 2 và tuần 3 của Lớp 5 là hai bài
+      // hoàn toàn khác nhau, dùng chung một khoá thì qua bài này lại mở bài kia.
+      const key = weekKey(week.grade, week.subject);
+      const done = completedWeeks[key] ?? 0;
       const isFirstTime = week.weekNumber > done;
       if (!isFirstTime) {
         return { passed: true, required, bonusMinutes: 0, unlockedWeek: null };
@@ -470,10 +574,10 @@ export function PlaytimeProvider({ children }: { children: React.ReactNode }) {
 
       const bonusMinutes = weekBonusMinutes(week);
       setAvailableSeconds((prev) => clampSeconds(prev + bonusMinutes * 60));
-      // Chỉ nâng tiến độ của ĐÚNG môn đó, không đụng các môn khác
+      // Chỉ nâng tiến độ của ĐÚNG môn đó trong ĐÚNG khối lớp đó
       setCompletedWeeks((prev) => ({
         ...prev,
-        [week.subject]: Math.max(prev[week.subject] ?? 0, week.weekNumber),
+        [key]: Math.max(prev[key] ?? 0, week.weekNumber),
       }));
       touch();
 
@@ -482,7 +586,8 @@ export function PlaytimeProvider({ children }: { children: React.ReactNode }) {
         passed: true,
         required,
         bonusMinutes,
-        unlockedWeek: nextWeek <= totalWeeks(week.subject) ? nextWeek : null,
+        unlockedWeek:
+          nextWeek <= totalWeeks(week.grade, week.subject) ? nextWeek : null,
       };
     },
     [completedWeeks, touch],
@@ -499,6 +604,14 @@ export function PlaytimeProvider({ children }: { children: React.ReactNode }) {
     [touch],
   );
 
+  const saveParentSettings = useCallback(
+    (settings: ParentSettings) => {
+      setParentSettings(sanitizeParentSettings(settings));
+      touch();
+    },
+    [touch],
+  );
+
   const resetProgress = useCallback(
     () => {
       setIsPlaying(false);
@@ -506,6 +619,10 @@ export function PlaytimeProvider({ children }: { children: React.ReactNode }) {
       setAvailableSeconds(0);
       setMasteredQuestionIds([]);
       setCompletedWeeks(EMPTY_WEEK_PROGRESS);
+      setAnswerStats(EMPTY_ANSWER_STATS);
+      // CỐ Ý giữ `parentSettings`: đặt lại tiến độ của con không có lý gì phải
+      // xoá luôn hạn mức mà phụ huynh vừa cấu hình.
+      setDailyUsage(sanitizeDailyUsage(null, new Date()));
       touch();
       return true;
     },
@@ -517,16 +634,30 @@ export function PlaytimeProvider({ children }: { children: React.ReactNode }) {
   const value = useMemo<PlaytimeContextValue>(
     () => ({
       currentUser: session
-        ? { userId: session.userId, username: session.username, role: session.role }
+        ? {
+            userId: session.userId,
+            username: session.username,
+            displayName: session.displayName,
+            grade: session.grade,
+            avatar: session.avatar,
+            role: session.role,
+            hasPin: session.hasPin,
+          }
         : null,
       hydrated,
       totalPoints,
       availableSeconds,
       availableMinutes,
       isPlaying,
-      isLocked: availableSeconds <= 0,
+      // Khoá Góc Game vì một trong hai lý do: hết phút trong ví, hoặc hết hạn
+      // mức của ngày. Màn hình đọc `dailyLimitReached` để nói đúng lý do.
+      isLocked: availableSeconds <= 0 || dailyLimitReached,
       masteredQuestionIds,
       completedWeeks,
+      answerStats,
+      parentSettings,
+      remainingTodaySeconds,
+      dailyLimitReached,
       progress: {
         totalPoints,
         accumulatedGameMinutes: availableMinutes,
@@ -537,6 +668,7 @@ export function PlaytimeProvider({ children }: { children: React.ReactNode }) {
       pausePlaying,
       completeWeek,
       grantMinutesByParent,
+      saveParentSettings,
       resetProgress,
       syncState,
       syncError,
@@ -554,12 +686,17 @@ export function PlaytimeProvider({ children }: { children: React.ReactNode }) {
       isPlaying,
       masteredQuestionIds,
       completedWeeks,
+      answerStats,
+      parentSettings,
+      remainingTodaySeconds,
+      dailyLimitReached,
       lastUpdated,
       submitAnswer,
       startPlaying,
       pausePlaying,
       completeWeek,
       grantMinutesByParent,
+      saveParentSettings,
       resetProgress,
       syncState,
       syncError,

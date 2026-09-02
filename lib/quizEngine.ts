@@ -9,10 +9,19 @@ import type { Question, Subject } from '../types';
  * và trộn lại thứ tự đáp án, để học sinh không học vẹt theo vị trí.
  */
 
-/** Số câu mỗi đề */
-export const QUESTIONS_PER_QUIZ = 10;
+/**
+ * Số câu mỗi đề của một TUẦN trong lộ trình.
+ *
+ * Tên có hậu tố `_WEEK_` để không lẫn với `QUESTIONS_PER_QUIZ` trong
+ * `constants/mockData.ts` (= 6, dùng cho môn rút đề ngẫu nhiên như Tiếng Anh).
+ * Trước đây hai hằng số trùng tên nhau, và màn hình Học Tập đã nhập sai con số:
+ * nó hiện "mỗi lượt 10 câu" cho Tiếng Anh trong khi đề thật chỉ có 6 câu.
+ */
+export const QUESTIONS_PER_WEEK_QUIZ = 10;
 
 export interface QuizSession {
+  /** Khối lớp của lộ trình đang làm */
+  grade: number;
   subject: Subject;
   weekNumber: number;
   /**
@@ -34,13 +43,17 @@ function shuffle<T>(items: T[]): T[] {
   return result;
 }
 
-/** Toàn bộ ngân hàng câu hỏi của một tuần */
-export function getWeekBank(subject: Subject, weekNumber: number): Question[] {
-  return getCurriculumWeek(subject, weekNumber)?.questions ?? [];
+/** Toàn bộ ngân hàng câu hỏi của một tuần trong một khối lớp */
+export function getWeekBank(
+  grade: number,
+  subject: Subject,
+  weekNumber: number,
+): Question[] {
+  return getCurriculumWeek(grade, subject, weekNumber)?.questions ?? [];
 }
 
 /**
- * Rút một đề mới cho tuần: lấy ngẫu nhiên tối đa `QUESTIONS_PER_QUIZ` câu từ
+ * Rút một đề mới cho tuần: lấy ngẫu nhiên tối đa `QUESTIONS_PER_WEEK_QUIZ` câu từ
  * ngân hàng của tuần rồi trộn thứ tự đáp án.
  *
  * Ưu tiên câu CHƯA từng trả lời đúng, để học sinh gặp kiến thức mới trước; khi
@@ -49,12 +62,13 @@ export function getWeekBank(subject: Subject, weekNumber: number): Question[] {
  * Ngân hàng nhỏ hơn 10 câu thì lấy hết — trả về ít câu hơn chứ không lặp câu.
  */
 export function generateQuizForWeek(
+  grade: number,
   subject: Subject,
   weekNumber: number,
   masteredQuestionIds: string[] = [],
-  count: number = QUESTIONS_PER_QUIZ,
+  count: number = QUESTIONS_PER_WEEK_QUIZ,
 ): QuizSession | null {
-  const bank = getWeekBank(subject, weekNumber);
+  const bank = getWeekBank(grade, subject, weekNumber);
   if (bank.length === 0) return null;
 
   const mastered = new Set(masteredQuestionIds);
@@ -64,6 +78,7 @@ export function generateQuizForWeek(
   const picked = [...fresh, ...reviewed].slice(0, Math.min(count, bank.length));
 
   return {
+    grade,
     subject,
     weekNumber,
     questionIds: picked.map((question) => question.id),
@@ -79,7 +94,7 @@ export function generateQuizForWeek(
  * bấm ô B".
  */
 export function rebuildQuiz(session: QuizSession): QuizSession {
-  const bank = getWeekBank(session.subject, session.weekNumber);
+  const bank = getWeekBank(session.grade, session.subject, session.weekNumber);
   const byId = new Map(bank.map((question) => [question.id, question]));
 
   const questions = session.questionIds
@@ -91,6 +106,10 @@ export function rebuildQuiz(session: QuizSession): QuizSession {
 }
 
 /** Số câu trong ngân hàng của một tuần */
-export function bankSize(subject: Subject, weekNumber: number): number {
-  return getWeekBank(subject, weekNumber).length;
+export function bankSize(
+  grade: number,
+  subject: Subject,
+  weekNumber: number,
+): number {
+  return getWeekBank(grade, subject, weekNumber).length;
 }

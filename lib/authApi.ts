@@ -1,13 +1,17 @@
 import { Platform } from 'react-native';
 
-import type { AuthSession, ProgressSyncPayload, SyncResult, UserRole } from '../types';
+import type { AuthSession, ProgressSyncPayload, SyncResult } from '../types';
 import {
   changePinLocal,
   loginAccountLocal,
   registerAccountLocal,
-  renameAccountLocal,
+  updateProfileLocal,
   verifyPinLocal,
+  type ProfilePatch,
+  type RegisterInput,
 } from './localAuth';
+
+export type { ProfilePatch, RegisterInput };
 
 /**
  * Client gọi tới `api/auth` và `api/progress`.
@@ -103,12 +107,9 @@ async function callApi<T>(options: RequestOptions): Promise<SyncResult<T>> {
 /* Xác thực                                                            */
 /* ------------------------------------------------------------------ */
 
-export async function registerAccount(input: {
-  username: string;
-  password: string;
-  role: UserRole;
-  pin?: string;
-}): Promise<SyncResult<AuthSession>> {
+export async function registerAccount(
+  input: RegisterInput,
+): Promise<SyncResult<AuthSession>> {
   if (!isApiConfigured) return registerAccountLocal(input);
 
   const result = await callApi<{ session: AuthSession }>({
@@ -179,21 +180,28 @@ export async function pushProgress(
 /* Tài khoản                                                           */
 /* ------------------------------------------------------------------ */
 
-/** Đổi tên hiển thị. Trả về tên đã được server chấp nhận. */
-export async function renameAccount(
+/**
+ * Cập nhật hồ sơ (họ tên, khối lớp, avatar). Trả về phiên đã cập nhật.
+ *
+ * Trả về cả `AuthSession` chứ không chỉ trường vừa đổi: server là nơi chốt giá
+ * trị cuối (cắt bớt khoảng trắng, kẹp khối lớp về 1-12), nên lấy nguyên bản của
+ * server chắc chắn hơn là tự đoán ở client.
+ */
+export async function updateProfile(
   token: string,
-  username: string,
-): Promise<SyncResult<string>> {
-  if (!isApiConfigured) return renameAccountLocal(token, username);
+  patch: ProfilePatch,
+): Promise<SyncResult<AuthSession>> {
+  if (!isApiConfigured) return updateProfileLocal(token, patch);
 
-  const result = await callApi<{ username: string }>({
+  const result = await callApi<{ session: Omit<AuthSession, 'token'> }>({
     method: 'POST',
-    path: '/api/account?action=rename',
+    path: '/api/account?action=set-profile',
     token,
-    body: { username },
+    body: patch,
   });
-  if (!result.ok && result.endpointMissing) return renameAccountLocal(token, username);
-  return result.ok ? { ok: true, data: result.data.username } : result;
+  if (!result.ok && result.endpointMissing) return updateProfileLocal(token, patch);
+  // Token không nằm trong phản hồi (server không cấp lại), nên ghép lại ở đây
+  return result.ok ? { ok: true, data: { ...result.data.session, token } } : result;
 }
 
 /** Kiểm tra mã PIN phụ huynh (xác thực ở server) */

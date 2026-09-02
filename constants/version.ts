@@ -4,7 +4,7 @@
  * Phải khớp với `version` trong `app.json` và `package.json`. Bộ kiểm tra cập
  * nhật so hằng số này với phiên bản mới nhất mà máy chủ báo về.
  */
-export const APP_VERSION = '1.0.7';
+export const APP_VERSION = '1.0.8';
 
 /**
  * So sánh hai chuỗi phiên bản dạng "1.0.1".

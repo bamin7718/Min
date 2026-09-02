@@ -1,10 +1,17 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
-import type { AuthSession, UserRole } from '../types';
+import { sanitizeAvatar, sanitizeGrade, type AuthSession, type UserRole } from '../types';
 
 const STORAGE_KEY = '@lop3-study-game/session-v1';
 
-/** Đọc phiên đã lưu. `null` nếu chưa đăng nhập. */
+/**
+ * Đọc phiên đã lưu. `null` nếu chưa đăng nhập.
+ *
+ * Ba trường hồ sơ (`displayName`, `grade`, `avatar`) và `hasPin` được thêm từ
+ * bản 1.0.8. Phiên lưu bằng bản cũ KHÔNG có chúng, nên phải điền giá trị mặc
+ * định thay vì coi bản ghi là hỏng — nếu trả `null` thì mọi người đang đăng nhập
+ * sẽ bị đăng xuất khi cập nhật.
+ */
 export async function loadSession(): Promise<AuthSession | null> {
   try {
     const raw = await AsyncStorage.getItem(STORAGE_KEY);
@@ -19,10 +26,20 @@ export async function loadSession(): Promise<AuthSession | null> {
     ) {
       return null;
     }
+    const role = parsed.role as UserRole;
     return {
       userId: parsed.userId,
       username: parsed.username,
-      role: parsed.role as UserRole,
+      // Chưa có họ tên thì tạm dùng tên đăng nhập, hơn là hiện ô trống trên header
+      displayName:
+        typeof parsed.displayName === 'string' && parsed.displayName.trim()
+          ? parsed.displayName
+          : parsed.username,
+      grade: sanitizeGrade(parsed.grade),
+      avatar: sanitizeAvatar(parsed.avatar),
+      role,
+      // Tài khoản phụ huynh của bản cũ chắc chắn đã có PIN (bản cũ bắt buộc đặt)
+      hasPin: typeof parsed.hasPin === 'boolean' ? parsed.hasPin : role === 'parent',
       token: parsed.token,
     };
   } catch (error) {

@@ -14,23 +14,29 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import {
+  completedWeeksOf,
+  contentGradeFor,
   getCurriculumWeek,
   getUnitsOf,
   hasCurriculum,
+  hasOwnContent,
+  subjectsForGrade,
   totalWeeks,
   weekStatusFor,
 } from '../constants/curriculum';
 import { weekBonusMinutes } from '../constants/mathCurriculum';
 import {
   POINTS_PER_CORRECT,
+  // Con số của môn RÚT ĐỀ NGẪU NHIÊN (Tiếng Anh) — đúng cái `pickQuizQuestions`
+  // dùng làm mặc định. Đừng lấy `QUESTIONS_PER_WEEK_QUIZ` của quizEngine cho hai
+  // chỗ hiển thị dưới: nó là số câu mỗi đề của một TUẦN trong lộ trình.
+  QUESTIONS_PER_QUIZ,
   SUBJECTS,
   getQuestionsBySubject,
   pickQuizQuestions,
   shuffleAllOptions,
 } from '../constants/mockData';
 import {
-  QUESTIONS_PER_QUIZ,
-  bankSize,
   generateQuizForWeek,
   rebuildQuiz,
   type QuizSession,
@@ -45,18 +51,22 @@ import {
   spacing,
   touch,
 } from '../constants/theme';
+import { useAuth } from '../context/AuthContext';
 import {
   usePlaytime,
   type RewardOutcome,
   type WeekOutcome,
 } from '../context/PlaytimeContext';
-import type {
-  RootTabParamList,
-  Subject,
-  SubjectInfo,
-  SubjectWeekProgress,
-  WeekStatus,
-  WeekTopic,
+import { vibrate } from '../lib/prefs';
+import { gradeLabel } from '../components/GradePicker';
+import {
+  DEFAULT_GRADE,
+  type RootTabParamList,
+  type Subject,
+  type SubjectInfo,
+  type SubjectWeekProgress,
+  type WeekStatus,
+  type WeekTopic,
 } from '../types';
 
 const OPTION_LABELS = ['A', 'B', 'C', 'D'] as const;
@@ -84,6 +94,18 @@ export default function QuizScreen() {
 
   const { masteredQuestionIds, completedWeeks, submitAnswer, completeWeek } =
     usePlaytime();
+
+  /**
+   * Khối lớp lấy từ hồ sơ tài khoản, KHÔNG cho chọn ở màn học tập.
+   *
+   * `contentGradeFor` quy về khối lớp thực sự có nội dung: hồ sơ chọn được 1-12
+   * nhưng hiện chỉ Lớp 1, 2, 3, 4, 5 có bài, các lớp còn lại tạm dùng đề Lớp 3.
+   * Muốn đổi lớp thì vào Cài đặt → Thông tin học sinh.
+   */
+  const { session: authSession } = useAuth();
+  const profileGrade = authSession?.grade ?? DEFAULT_GRADE;
+  const grade = contentGradeFor(profileGrade);
+  const usingFallbackGrade = !hasOwnContent(profileGrade);
 
   const [selectedSubject, setSelectedSubject] = useState<Subject | null>(null);
   /** Tuần đang làm bài — chỉ dùng cho môn Toán */
@@ -114,18 +136,18 @@ export default function QuizScreen() {
 
   const questions = useMemo(() => {
     if (!selectedSubject) return [];
-    if (hasCurriculum(selectedSubject)) return session?.questions ?? [];
+    if (hasCurriculum(grade, selectedSubject)) return session?.questions ?? [];
 
     // Môn chưa có lộ trình: rút ngẫu nhiên từ bộ đề chung
     return shuffleAllOptions(pickQuizQuestions(selectedSubject, masteredRef.current));
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedSubject, session, sessionId]);
+  }, [grade, selectedSubject, session, sessionId]);
 
   const currentQuestion = questions[questionIndex];
   const activeWeek =
     selectedSubject === null || selectedWeek === null
       ? undefined
-      : getCurriculumWeek(selectedSubject, selectedWeek);
+      : getCurriculumWeek(grade, selectedSubject, selectedWeek);
 
   // Hiệu ứng nảy nhẹ cho khung phản hồi đúng/sai
   const feedbackAnim = useRef(new Animated.Value(0)).current;
@@ -143,6 +165,11 @@ export default function QuizScreen() {
       }).start();
 
       if (isCorrect) return;
+
+      // Rung một nhịp cùng lúc với hiệu ứng lắc. `vibrate` tự im khi phụ huynh
+      // tắt công tắc "Rung khi trả lời sai" hoặc khi máy không có motor rung.
+      vibrate(40);
+
       shakeAnim.setValue(0);
       Animated.sequence([
         Animated.timing(shakeAnim, { toValue: 1, duration: 55, useNativeDriver: true }),
@@ -179,19 +206,23 @@ export default function QuizScreen() {
       if (!selectedSubject) return;
       resetSession();
       setSelectedWeek(weekNumber);
-      setSession(generateQuizForWeek(selectedSubject, weekNumber, masteredRef.current));
+      setSession(
+        generateQuizForWeek(grade, selectedSubject, weekNumber, masteredRef.current),
+      );
       setSessionId((prev) => prev + 1);
     },
-    [resetSession, selectedSubject],
+    [grade, resetSession, selectedSubject],
   );
 
   /** Rút một bộ câu hoàn toàn mới trong ngân hàng của tuần */
   const handleNewQuiz = useCallback(() => {
     if (!selectedSubject || selectedWeek === null) return;
     resetSession();
-    setSession(generateQuizForWeek(selectedSubject, selectedWeek, masteredRef.current));
+    setSession(
+      generateQuizForWeek(grade, selectedSubject, selectedWeek, masteredRef.current),
+    );
     setSessionId((prev) => prev + 1);
-  }, [resetSession, selectedSubject, selectedWeek]);
+  }, [grade, resetSession, selectedSubject, selectedWeek]);
 
   /** Giữ nguyên bộ câu vừa làm, chỉ trộn lại đáp án và xoá lựa chọn cũ */
   const handleRetrySameQuiz = useCallback(() => {
@@ -275,13 +306,17 @@ export default function QuizScreen() {
       >
         {selectedSubject === null ? (
           <SubjectPicker
+            grade={grade}
+            profileGrade={profileGrade}
+            usingFallbackGrade={usingFallbackGrade}
             isTablet={isTablet}
             masteredQuestionIds={masteredQuestionIds}
             completedWeeks={completedWeeks}
             onChoose={handleChooseSubject}
           />
-        ) : hasCurriculum(selectedSubject) && selectedWeek === null ? (
+        ) : hasCurriculum(grade, selectedSubject) && selectedWeek === null ? (
           <WeekPicker
+            grade={grade}
             subject={selectedSubject}
             isTablet={isTablet}
             completedWeeks={completedWeeks}
@@ -393,30 +428,80 @@ export default function QuizScreen() {
 /* Màn hình chọn môn học                                               */
 /* ------------------------------------------------------------------ */
 
+/** Nhãn cho biết đang làm bài của khối lớp nào */
+function GradeBadge({
+  grade,
+  profileGrade,
+  usingFallbackGrade,
+}: {
+  grade: number;
+  profileGrade: number;
+  usingFallbackGrade: boolean;
+}) {
+  return (
+    <View style={styles.gradeBadgeRow}>
+      <Text style={styles.gradeBadge}>📚 Bài tập - {gradeLabel(grade)}</Text>
+      {usingFallbackGrade && (
+        <Text style={styles.gradeBadgeNote}>
+          (hồ sơ {gradeLabel(profileGrade)} chưa có bài riêng)
+        </Text>
+      )}
+    </View>
+  );
+}
+
 function SubjectPicker({
+  grade,
+  profileGrade,
+  usingFallbackGrade,
   isTablet,
   masteredQuestionIds,
   completedWeeks,
   onChoose,
 }: {
+  grade: number;
+  profileGrade: number;
+  usingFallbackGrade: boolean;
   isTablet: boolean;
   masteredQuestionIds: string[];
   completedWeeks: SubjectWeekProgress;
   onChoose: (subject: Subject) => void;
 }) {
+  /**
+   * Chỉ hiện những môn có bài cho khối lớp này, cộng các môn không gắn với lớp
+   * nào (Tiếng Anh — rút đề ngẫu nhiên từ một bộ dùng chung).
+   */
+  const visible = useMemo(() => {
+    const allowed = new Set(
+      subjectsForGrade(
+        grade,
+        SUBJECTS.map((subject) => subject.key),
+      ),
+    );
+    return SUBJECTS.filter((subject) => allowed.has(subject.key));
+  }, [grade]);
+
+  const weeklyCount = totalWeeks(grade, 'Toán');
+
   return (
     <View>
+      <GradeBadge
+        grade={grade}
+        profileGrade={profileGrade}
+        usingFallbackGrade={usingFallbackGrade}
+      />
       <Text style={styles.sectionTitle}>Chọn môn em muốn học hôm nay</Text>
       <Text style={styles.sectionSubtitle}>
-        Toán và Tiếng Việt đi theo lộ trình {totalWeeks('Toán')} tuần; Tiếng Anh mỗi
-        lượt {QUESTIONS_PER_QUIZ} câu rút ngẫu nhiên. Trả lời đúng được +
+        Toán và Tiếng Việt đi theo lộ trình {weeklyCount} tuần; Tiếng Anh mỗi lượt{' '}
+        {QUESTIONS_PER_QUIZ} câu rút ngẫu nhiên. Trả lời đúng được +
         {POINTS_PER_CORRECT} điểm và cộng thêm phút chơi game nhé!
       </Text>
 
       <View style={[styles.subjectGrid, isTablet && styles.subjectGridTablet]}>
-        {SUBJECTS.map((subject) => (
+        {visible.map((subject) => (
           <SubjectCard
             key={subject.key}
+            grade={grade}
             subject={subject}
             isTablet={isTablet}
             masteredQuestionIds={masteredQuestionIds}
@@ -430,12 +515,14 @@ function SubjectPicker({
 }
 
 const SubjectCard = React.memo(function SubjectCard({
+  grade,
   subject,
   isTablet,
   masteredQuestionIds,
   completedWeeks,
   onPress,
 }: {
+  grade: number;
   subject: SubjectInfo;
   isTablet: boolean;
   masteredQuestionIds: string[];
@@ -443,12 +530,12 @@ const SubjectCard = React.memo(function SubjectCard({
   onPress: () => void;
 }) {
   // Môn có lộ trình thì đo tiến độ theo tuần, môn còn lại theo số câu đã đúng
-  const isWeekly = hasCurriculum(subject.key);
+  const isWeekly = hasCurriculum(grade, subject.key);
   const questions = getQuestionsBySubject(subject.key);
   const doneCount = isWeekly
-    ? (completedWeeks[subject.key] ?? 0)
+    ? completedWeeksOf(grade, subject.key, completedWeeks)
     : questions.filter((question) => masteredQuestionIds.includes(question.id)).length;
-  const totalCount = isWeekly ? totalWeeks(subject.key) : questions.length;
+  const totalCount = isWeekly ? totalWeeks(grade, subject.key) : questions.length;
   const isCompleted = totalCount > 0 && doneCount === totalCount;
 
   return (
@@ -506,30 +593,48 @@ const WEEK_STATUS_META: Record<
   locked: { label: 'Khoá', icon: 'lock-closed', color: colors.textMuted },
 };
 
+/**
+ * Ranh giới hai học kỳ. Lộ trình 35 tuần của Lớp 3 chia 18 / 17.
+ *
+ * Lộ trình ngắn hơn ngưỡng này thì KHÔNG hiện tab học kỳ — các lớp mới hiện có 6
+ * tuần, bày ra hai tab mà tab "Học kỳ 2" trống trơn thì học sinh tưởng bài bị mất.
+ */
+const SEMESTER_1_LAST_WEEK = 18;
+
 const WeekPicker = React.memo(function WeekPicker({
+  grade,
   subject,
   isTablet,
   completedWeeks,
   onChooseWeek,
   onBack,
 }: {
+  grade: number;
   subject: Subject;
   isTablet: boolean;
   completedWeeks: SubjectWeekProgress;
   onChooseWeek: (weekNumber: number) => void;
   onBack: () => void;
 }) {
-  const done = completedWeeks[subject] ?? 0;
-  const total = totalWeeks(subject);
+  const done = completedWeeksOf(grade, subject, completedWeeks);
+  const total = totalWeeks(grade, subject);
   const currentWeek = Math.min(done + 1, total);
+  const hasSemesters = total > SEMESTER_1_LAST_WEEK;
 
   /** Mặc định mở đúng học kỳ chứa tuần em đang học */
-  const [semester, setSemester] = useState<1 | 2>(currentWeek > 18 ? 2 : 1);
+  const [semester, setSemester] = useState<1 | 2>(
+    currentWeek > SEMESTER_1_LAST_WEEK ? 2 : 1,
+  );
 
   // Nhóm theo giai đoạn, rồi lọc theo học kỳ đang chọn
   const groups = useMemo(() => {
-    const range = semester === 1 ? [1, 18] : [19, 35];
-    return getUnitsOf(subject)
+    const range: [number, number] = !hasSemesters
+      ? [1, total]
+      : semester === 1
+        ? [1, SEMESTER_1_LAST_WEEK]
+        : [SEMESTER_1_LAST_WEEK + 1, total];
+
+    return getUnitsOf(grade, subject)
       .map((group) => ({
         ...group,
         weeks: group.weeks.filter(
@@ -537,7 +642,7 @@ const WeekPicker = React.memo(function WeekPicker({
         ),
       }))
       .filter((group) => group.weeks.length > 0);
-  }, [subject, semester]);
+  }, [grade, hasSemesters, semester, subject, total]);
 
   return (
     <View>
@@ -551,46 +656,51 @@ const WeekPicker = React.memo(function WeekPicker({
         <Text style={styles.backButtonText}>Đổi môn</Text>
       </Pressable>
 
-      <Text style={styles.sectionTitle}>Lộ trình {subject} Lớp 3</Text>
+      <Text style={styles.gradeBadge}>📚 Bài tập - {gradeLabel(grade)}</Text>
+      <Text style={styles.sectionTitle}>
+        Lộ trình {subject} {gradeLabel(grade)}
+      </Text>
       <Text style={styles.sectionSubtitle}>
         Đã hoàn thành {done}/{total} tuần. Em đang học{' '}
         <Text style={styles.sectionSubtitleStrong}>Tuần {currentWeek}</Text> — học xong
         một tuần sẽ mở tuần tiếp theo.
       </Text>
 
-      {/* Chuyển nhanh giữa hai học kỳ */}
-      <View style={styles.semesterTabs}>
-        {([1, 2] as const).map((value) => {
-          const isActive = semester === value;
-          return (
-            <Pressable
-              key={value}
-              onPress={() => setSemester(value)}
-              accessibilityRole="button"
-              accessibilityState={{ selected: isActive }}
-              accessibilityLabel={
-                value === 1 ? 'Xem Học kỳ 1, tuần 1 đến 18' : 'Xem Học kỳ 2, tuần 19 đến 35'
-              }
-              style={({ pressed }) => [
-                styles.semesterTab,
-                isActive && styles.semesterTabActive,
-                pressed && styles.pressed,
-              ]}
-            >
-              <Text
-                style={[styles.semesterText, isActive && styles.semesterTextActive]}
+      {/* Chuyển nhanh giữa hai học kỳ — chỉ với lộ trình dài hơn một học kỳ */}
+      {hasSemesters && (
+        <View style={styles.semesterTabs}>
+          {([1, 2] as const).map((value) => {
+            const isActive = semester === value;
+            const from = value === 1 ? 1 : SEMESTER_1_LAST_WEEK + 1;
+            const to = value === 1 ? SEMESTER_1_LAST_WEEK : total;
+            return (
+              <Pressable
+                key={value}
+                onPress={() => setSemester(value)}
+                accessibilityRole="button"
+                accessibilityState={{ selected: isActive }}
+                accessibilityLabel={`Xem Học kỳ ${value}, tuần ${from} đến ${to}`}
+                style={({ pressed }) => [
+                  styles.semesterTab,
+                  isActive && styles.semesterTabActive,
+                  pressed && styles.pressed,
+                ]}
               >
-                {value === 1 ? 'Học kỳ 1' : 'Học kỳ 2'}
-              </Text>
-              <Text
-                style={[styles.semesterRange, isActive && styles.semesterRangeActive]}
-              >
-                {value === 1 ? 'Tuần 1 – 18' : 'Tuần 19 – 35'}
-              </Text>
-            </Pressable>
-          );
-        })}
-      </View>
+                <Text
+                  style={[styles.semesterText, isActive && styles.semesterTextActive]}
+                >
+                  Học kỳ {value}
+                </Text>
+                <Text
+                  style={[styles.semesterRange, isActive && styles.semesterRangeActive]}
+                >
+                  Tuần {from} – {to}
+                </Text>
+              </Pressable>
+            );
+          })}
+        </View>
+      )}
 
       {groups.map((group) => (
         <View key={group.unit} style={styles.weekGroup}>
@@ -604,7 +714,7 @@ const WeekPicker = React.memo(function WeekPicker({
               <WeekCard
                 key={week.weekNumber}
                 week={week}
-                status={weekStatusFor(subject, week.weekNumber, completedWeeks)}
+                status={weekStatusFor(grade, subject, week.weekNumber, completedWeeks)}
                 isTablet={isTablet}
                 onSelect={onChooseWeek}
               />
@@ -1040,6 +1150,28 @@ const styles = StyleSheet.create({
     padding: spacing.xl,
   },
   sectionTitle: { fontSize: 20, fontWeight: '800', color: colors.text },
+
+  // ---- Nhãn khối lớp ----
+  gradeBadgeRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    flexWrap: 'wrap',
+    gap: spacing.sm,
+    marginBottom: spacing.sm,
+  },
+  gradeBadge: {
+    alignSelf: 'flex-start',
+    fontSize: 13,
+    fontWeight: '800',
+    color: colors.primaryDark,
+    backgroundColor: colors.primarySoft,
+    paddingHorizontal: spacing.md,
+    paddingVertical: 5,
+    borderRadius: radius.pill,
+    overflow: 'hidden',
+    marginBottom: spacing.sm,
+  },
+  gradeBadgeNote: { fontSize: 11, color: colors.textMuted, marginBottom: spacing.sm },
   sectionSubtitle: {
     fontSize: 14,
     color: colors.textMuted,

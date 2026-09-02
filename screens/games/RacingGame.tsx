@@ -10,10 +10,11 @@ import {
 
 import { getCurriculum, totalWeeks } from '../../constants/curriculum';
 import { colors, elevation, radius, spacing, TABLET_BREAKPOINT } from '../../constants/theme';
+import { useAuth } from '../../context/AuthContext';
 import { usePlaytime } from '../../context/PlaytimeContext';
 import { generateQuizForWeek } from '../../lib/quizEngine';
 import { playGameSound } from '../../lib/gameSound';
-import type { Question, Subject } from '../../types';
+import { DEFAULT_GRADE, type Question, type Subject } from '../../types';
 import GameShell from './GameShell';
 import {
   advanceRace,
@@ -175,6 +176,12 @@ function QuestionPanel({
 
 export default function RacingGame({ onExit }: { onExit: () => void }) {
   const { isPlaying, submitAnswer } = usePlaytime();
+  /**
+   * Câu hỏi trong trò đua lấy từ lộ trình của CHÍNH khối lớp học sinh đang học.
+   * Không cho chọn lớp ở đây: đây là game, không phải chỗ đổi hồ sơ.
+   */
+  const { session } = useAuth();
+  const grade = session?.grade ?? DEFAULT_GRADE;
   const { width } = useWindowDimensions();
   const isTablet = width >= TABLET_BREAKPOINT;
 
@@ -205,16 +212,16 @@ export default function RacingGame({ onExit }: { onExit: () => void }) {
 
   /** Rút một câu mới cho tuần đang chọn */
   const drawQuestion = useCallback((): Question | null => {
-    const session = generateQuizForWeek(subject, week, usedRef.current, 1);
-    if (session && session.questions.length > 0) {
-      usedRef.current = [...usedRef.current, session.questions[0].id];
-      return session.questions[0];
+    const drawn = generateQuizForWeek(grade, subject, week, usedRef.current, 1);
+    if (drawn && drawn.questions.length > 0) {
+      usedRef.current = [...usedRef.current, drawn.questions[0].id];
+      return drawn.questions[0];
     }
     // Hết câu chưa dùng thì bắt đầu lại vòng mới
     usedRef.current = [];
-    const fresh = generateQuizForWeek(subject, week, [], 1);
+    const fresh = generateQuizForWeek(grade, subject, week, [], 1);
     return fresh?.questions[0] ?? null;
-  }, [subject, week]);
+  }, [grade, subject, week]);
 
   const nextPrompt = useCallback(
     (who: 'p1' | 'p2') => {
@@ -304,7 +311,7 @@ export default function RacingGame({ onExit }: { onExit: () => void }) {
     [nextPrompt, prompts, submitAnswer],
   );
 
-  const weeks = useMemo(() => getCurriculum(subject) ?? [], [subject]);
+  const weeks = useMemo(() => getCurriculum(grade, subject) ?? [], [grade, subject]);
   const weekTitle = weeks.find((w) => w.weekNumber === week)?.title ?? '';
 
   const me = frame ? frame.cars.find((car) => car.id === 'p1') : undefined;
@@ -401,7 +408,7 @@ export default function RacingGame({ onExit }: { onExit: () => void }) {
             {weekTitle ? ` · ${weekTitle}` : ''}
           </Text>
           <View style={styles.weekGrid}>
-            {Array.from({ length: totalWeeks(subject) }, (_, i) => i + 1).map((number) => (
+            {Array.from({ length: totalWeeks(grade, subject) }, (_, i) => i + 1).map((number) => (
               <Pressable
                 key={number}
                 onPress={() => setWeek(number)}

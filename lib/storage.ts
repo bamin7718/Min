@@ -1,11 +1,12 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
 import {
-  EMPTY_WEEK_PROGRESS,
+  sanitizeAnswerStats,
+  sanitizeDailyUsage,
+  sanitizeParentSettings,
+  sanitizeWeekProgress,
   type ProgressSyncPayload,
   type StoredProgress,
-  type Subject,
-  type SubjectWeekProgress,
 } from '../types';
 
 /**
@@ -29,27 +30,26 @@ export function progressKey(userId: string): string {
 /* Tiến độ                                                             */
 /* ------------------------------------------------------------------ */
 
-/** Map tiến độ tuần luôn đủ ba môn và nằm trong khoảng hợp lệ */
-function sanitizeWeeks(raw: Partial<SubjectWeekProgress> | undefined): SubjectWeekProgress {
-  const result = { ...EMPTY_WEEK_PROGRESS };
-  if (!raw) return result;
-
-  for (const subject of Object.keys(result) as Subject[]) {
-    const value = Number(raw[subject]);
-    if (Number.isFinite(value)) result[subject] = Math.min(35, Math.max(0, Math.floor(value)));
-  }
-  return result;
-}
-
+/**
+ * Đưa bản ghi đọc từ AsyncStorage về đúng hình dạng `StoredProgress`.
+ *
+ * Cũng chính là chỗ NÂNG CẤP từ `version: 1` lên `2`: bản ghi cũ không có
+ * `answerStats` / `parentSettings` / `dailyUsage`, các hàm sanitize tương ứng
+ * nhận `undefined` và trả về giá trị mặc định. Không cần nhánh `if (version ===
+ * 1)` riêng — thiếu trường và trường hỏng được xử lý y như nhau.
+ */
 function sanitizeProgress(raw: Partial<StoredProgress>): StoredProgress {
   return {
-    version: 1,
+    version: 2,
     totalPoints: Math.max(0, Math.floor(raw.totalPoints ?? 0)),
     availableSeconds: Math.max(0, raw.availableSeconds ?? 0),
     masteredQuestionIds: Array.isArray(raw.masteredQuestionIds)
       ? raw.masteredQuestionIds.filter((x): x is string => typeof x === 'string')
       : [],
-    completedWeeks: sanitizeWeeks(raw.completedWeeks),
+    completedWeeks: sanitizeWeekProgress(raw.completedWeeks),
+    answerStats: sanitizeAnswerStats(raw.answerStats),
+    parentSettings: sanitizeParentSettings(raw.parentSettings),
+    dailyUsage: sanitizeDailyUsage(raw.dailyUsage, new Date()),
     lastUpdated: raw.lastUpdated ?? new Date().toISOString(),
   };
 }
@@ -83,6 +83,22 @@ export async function clearLocalProgress(userId: string): Promise<void> {
     await AsyncStorage.removeItem(progressKey(userId));
   } catch (error) {
     console.warn('[storage] Không xoá được tiến độ:', error);
+  }
+}
+
+/**
+ * Xoá bộ nhớ đệm cục bộ của MỘT tài khoản: ảnh chụp tiến độ và hàng đợi đồng bộ.
+ *
+ * Chỉ an toàn khi hàng đợi đã rỗng và có máy chủ đồng bộ — lúc đó server mới là
+ * bản đầy đủ và mọi thứ xoá ở đây đều dựng lại được. Nơi gọi (màn hình Cài đặt)
+ * phải tự kiểm hai điều kiện đó; hàm này cố tình KHÔNG tự kiểm để không phải
+ * nhúng thêm phụ thuộc vào cấu hình API.
+ */
+export async function clearDerivedCache(userId: string): Promise<void> {
+  try {
+    await AsyncStorage.multiRemove([progressKey(userId), QUEUE_KEY]);
+  } catch (error) {
+    console.warn('[storage] Không xoá được bộ nhớ đệm:', error);
   }
 }
 
@@ -168,7 +184,7 @@ export async function countPending(): Promise<number> {
 /* Giải quyết xung đột                                                 */
 /* ------------------------------------------------------------------ */
 
-/** So hai mốc ISO. Supabase trả "+00:00" còn `Date` trả "Z" nên phải parse. */
+/** So hai mốc ISO. Turso DB trả "+00:00" còn `Date` trả "Z" nên phải parse. */
 function parseTime(value: string): number {
   const time = Date.parse(value);
   return Number.isNaN(time) ? 0 : time;

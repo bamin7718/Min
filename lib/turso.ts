@@ -4,9 +4,13 @@
 import { createClient, type Client } from '@libsql/client/web';
 
 import {
-  EMPTY_WEEK_PROGRESS,
+  sanitizeAnswerStats,
+  sanitizeAvatar,
+  sanitizeGrade,
+  sanitizeParentSettings,
+  sanitizeWeekProgress,
+  weekKey,
   type ProgressSyncPayload,
-  type Subject,
   type SubjectWeekProgress,
   type UserRole,
 } from '../types';
@@ -136,16 +140,69 @@ async function migrateCompletedWeeks(client: Client): Promise<void> {
   );
 }
 
+/**
+ * Thêm ba cột hồ sơ cho bảng `users` đã tồn tại: họ tên, khối lớp, avatar.
+ *
+ * Tài khoản tạo từ bản cũ không có họ tên, nên điền bằng chính tên đăng nhập —
+ * để trống thì header sẽ hiện một chỗ rỗng thay vì tên người dùng.
+ */
+async function migrateUserProfile(client: Client): Promise<void> {
+  const columns = await tableColumns(client, 'users');
+  if (columns.size === 0) return; // chưa có bảng, phần CREATE bên dưới lo
+
+  const statements: string[] = [];
+  if (!columns.has('display_name')) {
+    statements.push(`ALTER TABLE users ADD COLUMN display_name TEXT NOT NULL DEFAULT ''`);
+  }
+  if (!columns.has('grade')) {
+    statements.push(`ALTER TABLE users ADD COLUMN grade INTEGER NOT NULL DEFAULT 3`);
+  }
+  if (!columns.has('avatar')) {
+    statements.push(`ALTER TABLE users ADD COLUMN avatar TEXT NOT NULL DEFAULT ''`);
+  }
+  if (statements.length === 0) return;
+
+  statements.push(`UPDATE users SET display_name = username WHERE display_name = ''`);
+  await client.batch(statements, 'write');
+}
+
+/**
+ * Thêm cột `answer_stats` (số câu đã làm / đúng) và `parent_settings` (hạn mức
+ * ngày, hệ số thưởng) cho bảng `user_progress` đã tồn tại.
+ */
+async function migrateProgressExtras(client: Client): Promise<void> {
+  const columns = await tableColumns(client, 'user_progress');
+  if (columns.size === 0) return;
+
+  const statements: string[] = [];
+  if (!columns.has('answer_stats')) {
+    statements.push(
+      `ALTER TABLE user_progress ADD COLUMN answer_stats TEXT NOT NULL DEFAULT '{}'`,
+    );
+  }
+  if (!columns.has('parent_settings')) {
+    statements.push(
+      `ALTER TABLE user_progress ADD COLUMN parent_settings TEXT NOT NULL DEFAULT '{}'`,
+    );
+  }
+  if (statements.length > 0) await client.batch(statements, 'write');
+}
+
 /** Tạo toàn bộ bảng nếu chưa có, và nâng cấp bảng cũ. An toàn khi gọi nhiều lần. */
 export async function initDatabase(client: Client): Promise<void> {
   await migrateUserProgress(client);
   await migrateCompletedWeeks(client);
+  await migrateUserProfile(client);
+  await migrateProgressExtras(client);
 
   await client.batch(
     [
       `CREATE TABLE IF NOT EXISTS users (
          id            TEXT PRIMARY KEY,
          username      TEXT NOT NULL UNIQUE,
+         display_name  TEXT NOT NULL DEFAULT '',
+         grade         INTEGER NOT NULL DEFAULT 3,
+         avatar        TEXT NOT NULL DEFAULT '',
          password_hash TEXT NOT NULL,
          role          TEXT NOT NULL CHECK (role IN ('student', 'parent')),
          pin_code      TEXT,
@@ -160,6 +217,8 @@ export async function initDatabase(client: Client): Promise<void> {
          accumulated_game_minutes INTEGER NOT NULL DEFAULT 0,
          mastered_question_ids    TEXT NOT NULL DEFAULT '[]',
          completed_weeks          TEXT NOT NULL DEFAULT '{}',
+         answer_stats             TEXT NOT NULL DEFAULT '{}',
+         parent_settings          TEXT NOT NULL DEFAULT '{}',
          updated_at               TEXT NOT NULL,
          UNIQUE (user_id, subject)
        )`,
@@ -207,9 +266,19 @@ export async function initDatabase(client: Client): Promise<void> {
 export interface UserRecord {
   id: string;
   username: string;
+  /** Họ và tên, thứ hiện trên header của app */
+  displayName: string;
+  /** Khối lớp 1-12 */
+  grade: number;
+  /** Emoji avatar */
+  avatar: string;
   passwordHash: string;
   role: UserRole;
-  /** Hash của PIN phụ huynh, `null` với học sinh */
+  /**
+   * Hash của mã PIN mở khu vực phụ huynh, `null` khi chưa đặt.
+   *
+   * Từ bản 1.0.8 mọi tài khoản đều đặt được PIN, không riêng vai trò `parent`.
+   */
   pinHash: string | null;
   createdAt: string;
 }
@@ -219,10 +288,20 @@ function toInt(value: unknown): number {
   return Number.isFinite(n) ? Math.max(0, Math.floor(n)) : 0;
 }
 
+/** Cột chọn cho mọi truy vấn user — khai một chỗ để không sót cột mới */
+const USER_COLUMNS =
+  'id, username, display_name, grade, avatar, password_hash, role, pin_code, created_at';
+
 function rowToUser(row: Record<string, unknown>): UserRecord {
+  const username = String(row.username);
+  const displayName = row.display_name ? String(row.display_name).trim() : '';
   return {
     id: String(row.id),
-    username: String(row.username),
+    username,
+    // Dòng cũ (trước migration) có thể vẫn rỗng: dùng tên đăng nhập thay thế
+    displayName: displayName || username,
+    grade: sanitizeGrade(row.grade),
+    avatar: sanitizeAvatar(row.avatar),
     passwordHash: String(row.password_hash),
     role: row.role === 'parent' ? 'parent' : 'student',
     pinHash: row.pin_code === null || row.pin_code === undefined ? null : String(row.pin_code),
@@ -236,8 +315,7 @@ export async function findUserByUsername(
   username: string,
 ): Promise<UserRecord | null> {
   const result = await client.execute({
-    sql: `SELECT id, username, password_hash, role, pin_code, created_at
-            FROM users WHERE lower(username) = lower(?)`,
+    sql: `SELECT ${USER_COLUMNS} FROM users WHERE lower(username) = lower(?)`,
     args: [username],
   });
   const row = result.rows[0];
@@ -249,8 +327,7 @@ export async function findUserById(
   userId: string,
 ): Promise<UserRecord | null> {
   const result = await client.execute({
-    sql: `SELECT id, username, password_hash, role, pin_code, created_at
-            FROM users WHERE id = ?`,
+    sql: `SELECT ${USER_COLUMNS} FROM users WHERE id = ?`,
     args: [userId],
   });
   const row = result.rows[0];
@@ -267,6 +344,9 @@ export async function createUser(
   user: {
     id: string;
     username: string;
+    displayName: string;
+    grade: number;
+    avatar: string;
     passwordHash: string;
     role: UserRole;
     pinHash: string | null;
@@ -282,15 +362,28 @@ export async function createUser(
     await client.batch(
       [
         {
-          sql: `INSERT INTO users (id, username, password_hash, role, pin_code, created_at)
-                VALUES (?, ?, ?, ?, ?, ?)`,
-          args: [user.id, user.username, user.passwordHash, user.role, user.pinHash, now],
+          sql: `INSERT INTO users (
+                  id, username, display_name, grade, avatar,
+                  password_hash, role, pin_code, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          args: [
+            user.id,
+            user.username,
+            user.displayName,
+            sanitizeGrade(user.grade),
+            sanitizeAvatar(user.avatar),
+            user.passwordHash,
+            user.role,
+            user.pinHash,
+            now,
+          ],
         },
         {
           sql: `INSERT INTO user_progress (
                   id, user_id, subject, completed_week, total_points,
-                  accumulated_game_minutes, mastered_question_ids, completed_weeks, updated_at
-                ) VALUES (?, ?, 'chung', 0, 0, 0, '[]', '{}', ?)`,
+                  accumulated_game_minutes, mastered_question_ids, completed_weeks,
+                  answer_stats, parent_settings, updated_at
+                ) VALUES (?, ?, 'chung', 0, 0, 0, '[]', '{}', '{}', '{}', ?)`,
           args: [progressId, user.id, now],
         },
       ],
@@ -307,25 +400,44 @@ export async function createUser(
 }
 
 /**
- * Đổi tên đăng nhập. Trả về `false` nếu tên mới đã có người dùng.
- * Luôn ràng buộc `WHERE id = ?` để không sửa nhầm tài khoản khác.
+ * Cập nhật hồ sơ: họ tên, khối lớp, avatar.
+ *
+ * KHÔNG sửa `username`. Tên đăng nhập là ID để tra tài khoản và cũng là thứ học
+ * sinh dùng để vào app; cho đổi thì phải xử lý cả va chạm UNIQUE và trường hợp
+ * con quên tên mới. Muốn đổi tên hiển thị thì sửa `display_name`.
+ *
+ * Chỉ ghi những trường được truyền vào — `undefined` nghĩa là giữ nguyên. Luôn
+ * ràng buộc `WHERE id = ?` để không sửa nhầm tài khoản khác.
  */
-export async function updateUsername(
+export async function updateUserProfile(
   client: Client,
   userId: string,
-  username: string,
-): Promise<boolean> {
-  try {
-    await client.execute({
-      sql: 'UPDATE users SET username = ? WHERE id = ?',
-      args: [username, userId],
-    });
-    return true;
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    if (/UNIQUE constraint failed/i.test(message)) return false;
-    throw error;
+  patch: { displayName?: string; grade?: number; avatar?: string },
+): Promise<void> {
+  const sets: string[] = [];
+  const args: (string | number)[] = [];
+
+  if (patch.displayName !== undefined) {
+    sets.push('display_name = ?');
+    args.push(patch.displayName.trim());
   }
+  if (patch.grade !== undefined) {
+    sets.push('grade = ?');
+    args.push(sanitizeGrade(patch.grade));
+  }
+  if (patch.avatar !== undefined) {
+    sets.push('avatar = ?');
+    args.push(sanitizeAvatar(patch.avatar));
+  }
+  // Không có gì để đổi thì đừng chạy `UPDATE users SET WHERE id = ?` — câu đó
+  // sai cú pháp SQL, sẽ thành lỗi 502 cho một yêu cầu vô hại.
+  if (sets.length === 0) return;
+
+  args.push(userId);
+  await client.execute({
+    sql: `UPDATE users SET ${sets.join(', ')} WHERE id = ?`,
+    args,
+  });
 }
 
 /** Cập nhật mã PIN (đã băm) của phụ huynh */
@@ -344,21 +456,15 @@ export async function updatePinHash(
 /* Bảng user_progress — luôn ràng buộc theo user_id                    */
 /* ------------------------------------------------------------------ */
 
-/** Đọc map tiến độ tuần từ JSON đã lưu, luôn trả đủ ba môn */
+/**
+ * Đọc map tiến độ tuần từ cột JSON.
+ *
+ * `sanitizeWeekProgress` lo cả việc nâng khoá cũ (`"Toán"`) lên dạng có khối lớp
+ * (`"3:Toán"`), nên dữ liệu đã nằm trong database từ trước bản 1.0.9 vẫn đọc ra
+ * đúng tiến độ Lớp 3.
+ */
 function parseWeeks(value: unknown): SubjectWeekProgress {
-  const result = { ...EMPTY_WEEK_PROGRESS };
-  if (typeof value !== 'string') return result;
-
-  try {
-    const parsed = JSON.parse(value) as Record<string, unknown>;
-    for (const subject of Object.keys(result) as Subject[]) {
-      const n = Number(parsed[subject]);
-      if (Number.isFinite(n)) result[subject] = Math.min(35, Math.max(0, Math.floor(n)));
-    }
-  } catch {
-    // JSON hỏng thì coi như chưa có tiến độ, không làm sập cả luồng đọc
-  }
-  return result;
+  return sanitizeWeekProgress(parseJsonObject(value));
 }
 
 function parseIdList(value: unknown): string[] {
@@ -371,6 +477,20 @@ function parseIdList(value: unknown): string[] {
   }
 }
 
+/**
+ * Đọc một cột JSON thành object. Trả `null` khi hỏng, để hàm `sanitize*` tương
+ * ứng tự điền giá trị mặc định.
+ */
+function parseJsonObject(value: unknown): unknown {
+  if (typeof value !== 'string') return null;
+  try {
+    const parsed = JSON.parse(value);
+    return typeof parsed === 'object' && parsed !== null ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
 /** Đọc tiến độ CỦA CHÍNH user đó. `null` khi chưa có bản ghi. */
 export async function readProgress(
   client: Client,
@@ -378,7 +498,7 @@ export async function readProgress(
 ): Promise<ProgressSyncPayload | null> {
   const result = await client.execute({
     sql: `SELECT total_points, accumulated_game_minutes, mastered_question_ids,
-                 completed_weeks, updated_at
+                 completed_weeks, answer_stats, parent_settings, updated_at
             FROM user_progress
            WHERE user_id = ? AND subject = 'chung'`,
     args: [userId],
@@ -392,6 +512,8 @@ export async function readProgress(
     accumulatedGameMinutes: toInt(row.accumulated_game_minutes),
     masteredQuestionIds: parseIdList(row.mastered_question_ids),
     completedWeeks: parseWeeks(row.completed_weeks),
+    answerStats: sanitizeAnswerStats(parseJsonObject(row.answer_stats)),
+    parentSettings: sanitizeParentSettings(parseJsonObject(row.parent_settings)),
     lastUpdated: String(row.updated_at),
   };
 }
@@ -406,25 +528,32 @@ export async function writeProgress(
   await client.execute({
     sql: `INSERT INTO user_progress (
             id, user_id, subject, completed_week, total_points,
-            accumulated_game_minutes, mastered_question_ids, completed_weeks, updated_at
-          ) VALUES (?, ?, 'chung', ?, ?, ?, ?, ?, ?)
+            accumulated_game_minutes, mastered_question_ids, completed_weeks,
+            answer_stats, parent_settings, updated_at
+          ) VALUES (?, ?, 'chung', ?, ?, ?, ?, ?, ?, ?, ?)
           ON CONFLICT(user_id, subject) DO UPDATE SET
             completed_week = excluded.completed_week,
             completed_weeks = excluded.completed_weeks,
             total_points = excluded.total_points,
             accumulated_game_minutes = excluded.accumulated_game_minutes,
             mastered_question_ids = excluded.mastered_question_ids,
+            answer_stats = excluded.answer_stats,
+            parent_settings = excluded.parent_settings,
             updated_at = excluded.updated_at
           WHERE user_progress.user_id = ?`,
     args: [
       progressId,
       userId,
-      // Giữ cột cũ đồng bộ với môn Toán để dữ liệu cũ vẫn đọc được
-      Math.max(0, Math.floor(progress.completedWeeks['Toán'] ?? 0)),
+      // Giữ cột `completed_week` cũ đồng bộ với Toán LỚP 3 để dữ liệu cũ vẫn đọc
+      // được. Chỉ Lớp 3 vì cột đó là một con số duy nhất, không mang khối lớp —
+      // ghi tiến độ của lớp khác vào đây thì con số ấy mất hết ý nghĩa.
+      Math.max(0, Math.floor(progress.completedWeeks[weekKey(3, 'Toán')] ?? 0)),
       Math.max(0, Math.floor(progress.totalPoints)),
       Math.max(0, Math.floor(progress.accumulatedGameMinutes)),
       JSON.stringify(progress.masteredQuestionIds),
       JSON.stringify(progress.completedWeeks),
+      JSON.stringify(sanitizeAnswerStats(progress.answerStats)),
+      JSON.stringify(sanitizeParentSettings(progress.parentSettings)),
       progress.lastUpdated,
       userId,
     ],

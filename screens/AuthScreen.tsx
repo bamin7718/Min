@@ -14,11 +14,12 @@ import {
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
-import { colors, radius, spacing } from '../constants/theme';
+import { colors, radius, spacing, touch } from '../constants/theme';
 import { BRAND_FOOTER, BRAND_SHORT, BRAND_TAGLINE } from '../constants/brand';
 import AppIcon from '../components/AppIcon';
+import GradePicker, { gradeLabel } from '../components/GradePicker';
 import { useAuth } from '../context/AuthContext';
-import type { UserRole } from '../types';
+import { DEFAULT_GRADE } from '../types';
 
 type Mode = 'signIn' | 'signUp';
 
@@ -33,16 +34,23 @@ interface FormMessage {
  * Mọi việc xác thực diễn ra ở `api/auth` — app chỉ gửi tên đăng nhập và mật
  * khẩu qua HTTPS rồi nhận về session token. App không giữ token database và
  * không tự truy vấn bảng `users`.
+ *
+ * Form đăng ký KHÔNG còn phần chọn vai trò và KHÔNG còn ô mã PIN:
+ *  - Mọi tài khoản mới là học sinh. Vai trò được chốt ở server chứ không đọc từ
+ *    body, nếu không thì gửi `{"role":"parent"}` bằng curl là tự cấp quyền được.
+ *  - Mã PIN phụ huynh đặt sau, trong Cài đặt → Khu vực phụ huynh. Bắt bé 8 tuổi
+ *    nghĩ ra và nhớ thêm một mã 4 số ngay lúc đăng ký chỉ làm bé bỏ dở.
  */
 export default function AuthScreen() {
   const insets = useSafeAreaInsets();
   const { signIn, signUp } = useAuth();
 
   const [mode, setMode] = useState<Mode>('signIn');
+  const [displayName, setDisplayName] = useState('');
   const [username, setUsername] = useState('');
+  const [grade, setGrade] = useState(DEFAULT_GRADE);
   const [password, setPassword] = useState('');
-  const [role, setRole] = useState<UserRole>('student');
-  const [pin, setPin] = useState('');
+  const [gradePickerOpen, setGradePickerOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<FormMessage | null>(null);
 
@@ -55,6 +63,10 @@ export default function AuthScreen() {
     Keyboard.dismiss();
     setMessage(null);
 
+    if (mode === 'signUp' && displayName.trim().length < 2) {
+      setMessage({ type: 'error', text: 'Con nhập họ và tên giúp cô nhé.' });
+      return;
+    }
     if (!username.trim()) {
       setMessage({ type: 'error', text: 'Vui lòng nhập tên đăng nhập.' });
       return;
@@ -63,16 +75,17 @@ export default function AuthScreen() {
       setMessage({ type: 'error', text: 'Mật khẩu phải có ít nhất 6 ký tự.' });
       return;
     }
-    if (mode === 'signUp' && role === 'parent' && !/^\d{4}$/.test(pin)) {
-      setMessage({ type: 'error', text: 'Phụ huynh cần nhập mã PIN gồm đúng 4 chữ số.' });
-      return;
-    }
 
     setBusy(true);
     const result =
       mode === 'signIn'
         ? await signIn(username, password)
-        : await signUp({ username, password, role, pin: role === 'parent' ? pin : undefined });
+        : await signUp({
+            username,
+            password,
+            displayName: displayName.trim(),
+            grade,
+          });
     setBusy(false);
 
     if (!result.ok) {
@@ -81,8 +94,7 @@ export default function AuthScreen() {
     }
     // Thành công: AuthProvider đổi session, App.tsx tự chuyển sang màn chính
     setPassword('');
-    setPin('');
-  }, [mode, password, pin, role, signIn, signUp, username]);
+  }, [displayName, grade, mode, password, signIn, signUp, username]);
 
   return (
     <KeyboardAvoidingView
@@ -138,6 +150,28 @@ export default function AuthScreen() {
             })}
           </View>
 
+          {/* Họ và tên — chỉ khi đăng ký. Đặt đầu tiên vì đây là ô dễ nhất. */}
+          {mode === 'signUp' && (
+            <>
+              <Text style={styles.fieldLabel}>Họ và tên của con</Text>
+              <TextInput
+                value={displayName}
+                onChangeText={(text) => {
+                  setDisplayName(text);
+                  setMessage(null);
+                }}
+                placeholder="vidu: Nguyễn Minh Khang"
+                placeholderTextColor={colors.textMuted}
+                autoCapitalize="words"
+                maxLength={48}
+                editable={!busy}
+                style={styles.input}
+                accessibilityLabel="Họ và tên"
+              />
+              <Text style={styles.hint}>Tên này sẽ hiện ở đầu ứng dụng.</Text>
+            </>
+          )}
+
           <Text style={styles.fieldLabel}>Tên đăng nhập</Text>
           <TextInput
             value={username}
@@ -146,7 +180,7 @@ export default function AuthScreen() {
               setUsername(text.replace(/[^a-zA-Z0-9_.-]/g, ''));
               setMessage(null);
             }}
-            placeholder="vidu: minh.anh"
+            placeholder="vidu: minhkhang2026"
             placeholderTextColor={colors.textMuted}
             autoCapitalize="none"
             autoCorrect={false}
@@ -155,6 +189,29 @@ export default function AuthScreen() {
             style={styles.input}
             accessibilityLabel="Tên đăng nhập"
           />
+          {mode === 'signUp' && (
+            <Text style={styles.hint}>Viết liền, không dấu — dùng để vào app.</Text>
+          )}
+
+          {/* Khối lớp — chỉ khi đăng ký */}
+          {mode === 'signUp' && (
+            <>
+              <Text style={styles.fieldLabel}>Khối lớp</Text>
+              <Pressable
+                onPress={() => {
+                  Keyboard.dismiss();
+                  setGradePickerOpen(true);
+                }}
+                disabled={busy}
+                accessibilityRole="button"
+                accessibilityLabel={`Khối lớp hiện chọn: ${gradeLabel(grade)}. Bấm để đổi.`}
+                style={({ pressed }) => [styles.selector, pressed && styles.pressed]}
+              >
+                <Text style={styles.selectorText}>🎓 {gradeLabel(grade)}</Text>
+                <Ionicons name="chevron-down" size={18} color={colors.primary} />
+              </Pressable>
+            </>
+          )}
 
           <Text style={styles.fieldLabel}>Mật khẩu</Text>
           <TextInput
@@ -173,59 +230,6 @@ export default function AuthScreen() {
             style={styles.input}
             accessibilityLabel="Mật khẩu"
           />
-
-          {/* Chọn vai trò — chỉ khi đăng ký */}
-          {mode === 'signUp' && (
-            <>
-              <Text style={styles.fieldLabel}>Em là ai?</Text>
-              <View style={styles.roleRow}>
-                <RoleCard
-                  label="Học sinh"
-                  emoji="🧑‍🎓"
-                  description="Làm bài và đổi giờ chơi game"
-                  isActive={role === 'student'}
-                  onPress={() => {
-                    setRole('student');
-                    setMessage(null);
-                  }}
-                />
-                <RoleCard
-                  label="Phụ huynh"
-                  emoji="👨‍👩‍👧"
-                  description="Cấp thêm giờ, cần mã PIN"
-                  isActive={role === 'parent'}
-                  onPress={() => {
-                    setRole('parent');
-                    setMessage(null);
-                  }}
-                />
-              </View>
-
-              {role === 'parent' && (
-                <>
-                  <Text style={styles.fieldLabel}>Mã PIN phụ huynh (4 số)</Text>
-                  <TextInput
-                    value={pin}
-                    onChangeText={(text) => {
-                      setPin(text.replace(/[^0-9]/g, ''));
-                      setMessage(null);
-                    }}
-                    placeholder="4 chữ số"
-                    placeholderTextColor={colors.textMuted}
-                    keyboardType="number-pad"
-                    secureTextEntry
-                    maxLength={4}
-                    editable={!busy}
-                    style={styles.input}
-                    accessibilityLabel="Mã PIN phụ huynh"
-                  />
-                  <Text style={styles.hint}>
-                    PIN này dùng để cấp thêm giờ chơi game và mở khu vực tài khoản.
-                  </Text>
-                </>
-              )}
-            </>
-          )}
 
           {message && (
             <Text
@@ -268,45 +272,20 @@ export default function AuthScreen() {
           <Text style={styles.hint}>
             {mode === 'signIn'
               ? 'Chưa có tài khoản? Bấm "Đăng ký" ở trên.'
-              : 'Mỗi tài khoản có điểm và giờ chơi game riêng, không lẫn với bạn khác.'}
+              : 'Mỗi tài khoản có điểm và giờ chơi game riêng, không lẫn với bạn khác. Phụ huynh đặt mã PIN sau, trong Cài đặt.'}
           </Text>
         </View>
 
         <Text style={styles.versionLabel}>{BRAND_FOOTER}</Text>
       </ScrollView>
-    </KeyboardAvoidingView>
-  );
-}
 
-function RoleCard({
-  label,
-  emoji,
-  description,
-  isActive,
-  onPress,
-}: {
-  label: string;
-  emoji: string;
-  description: string;
-  isActive: boolean;
-  onPress: () => void;
-}) {
-  return (
-    <Pressable
-      onPress={onPress}
-      accessibilityRole="button"
-      accessibilityState={{ selected: isActive }}
-      accessibilityLabel={`Chọn vai trò ${label}`}
-      style={({ pressed }) => [
-        styles.roleCard,
-        isActive && styles.roleCardActive,
-        pressed && styles.pressed,
-      ]}
-    >
-      <Text style={styles.roleEmoji}>{emoji}</Text>
-      <Text style={[styles.roleLabel, isActive && styles.roleLabelActive]}>{label}</Text>
-      <Text style={styles.roleDescription}>{description}</Text>
-    </Pressable>
+      <GradePicker
+        visible={gradePickerOpen}
+        value={grade}
+        onSelect={setGrade}
+        onClose={() => setGradePickerOpen(false)}
+      />
+    </KeyboardAvoidingView>
   );
 }
 
@@ -327,7 +306,7 @@ const styles = StyleSheet.create({
     color: colors.primaryDark,
     letterSpacing: 0.5,
   },
-  heroSubtitle: { fontSize: 14, color: colors.textMuted },
+  heroSubtitle: { fontSize: 14, color: colors.textMuted, textAlign: 'center' },
 
   card: {
     backgroundColor: colors.surface,
@@ -372,21 +351,19 @@ const styles = StyleSheet.create({
     backgroundColor: colors.background,
   },
 
-  roleRow: { flexDirection: 'row', gap: spacing.md },
-  roleCard: {
-    flex: 1,
-    borderWidth: 2,
+  /** Ô bấm mở hộp thoại chọn khối lớp — trông như input để cùng một hàng lối */
+  selector: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    borderWidth: 1.5,
     borderColor: colors.border,
     borderRadius: radius.md,
-    padding: spacing.md,
-    gap: 2,
-    backgroundColor: colors.surface,
+    paddingHorizontal: spacing.md,
+    minHeight: touch.primary,
+    backgroundColor: colors.background,
   },
-  roleCardActive: { borderColor: colors.primary, backgroundColor: colors.primarySoft },
-  roleEmoji: { fontSize: 28 },
-  roleLabel: { fontSize: 15, fontWeight: '800', color: colors.text },
-  roleLabelActive: { color: colors.primary },
-  roleDescription: { fontSize: 11, color: colors.textMuted, lineHeight: 15 },
+  selectorText: { fontSize: 16, fontWeight: '700', color: colors.text },
 
   message: { fontSize: 13, fontWeight: '700', marginTop: spacing.sm, lineHeight: 19 },
   messageError: { color: colors.danger },
@@ -401,7 +378,7 @@ const styles = StyleSheet.create({
     paddingVertical: spacing.md,
     borderRadius: radius.pill,
     marginTop: spacing.md,
-    minHeight: 52,
+    minHeight: touch.primary,
   },
   primaryButtonText: { color: colors.textOnPrimary, fontSize: 16, fontWeight: '800' },
   buttonDisabled: { opacity: 0.6 },
