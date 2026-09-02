@@ -1,9 +1,12 @@
-# Học tập & Góc Game — Lớp 3
+# Min EG — Min Education Gamification
 
 Ứng dụng React Native (Expo + TypeScript) kết hợp **học tập** và **quản lý thời gian
-chơi game** cho học sinh Lớp 3. Học sinh trả lời đúng câu hỏi Toán / Tiếng Việt /
-Tiếng Anh để tích luỹ phút chơi game; hết giờ thì màn hình Góc Game bị khoá và cần
-phụ huynh nhập PIN mới cấp thêm.
+chơi game** cho học sinh tiểu học. Học sinh trả lời đúng câu hỏi Toán / Tiếng Việt /
+Tiếng Anh để tích luỹ phút chơi game; hết giờ thì Góc Game bị khoá và cần phụ huynh
+nhập mã PIN mới cấp thêm.
+
+Phiên bản hiện tại: **v1.0.8** (`constants/version.ts`, `app.json`, `package.json` —
+pre-commit hook giữ ba tệp này đồng bộ).
 
 ## Chạy ở localhost
 
@@ -18,51 +21,80 @@ Sau đó:
 - **Android emulator**: nhấn `a` trong terminal.
 - **Trình duyệt** (kiểm tra nhanh): nhấn `w`, hoặc `npm run web`.
 
+Không cần cấu hình gì để chạy: thiếu máy chủ đồng bộ thì app tự vào **Local Mode** —
+tài khoản, tiến độ, mã PIN nằm trong AsyncStorage của máy.
+
 ### Yêu cầu môi trường
 
-- **npm >= 10.** npm 9.2.0 chạy trên Node 22 gặp lỗi `ENOENT rename` trong cacache
-  và không cài được dependency. Nâng cấp bằng `npm i -g npm@10` nếu cần.
-- Nếu `npx expo export` báo `hermesc ... exited with signal: SIGILL`, máy đang chạy
-  kiến trúc CPU mà binary Hermes đi kèm không hỗ trợ (ví dụ ARM qua PRoot). Việc này
-  **không ảnh hưởng `npx expo start`**; khi cần export thì thêm `--no-bytecode`.
+- **Node >= 20** (`engines` trong `package.json`). CI dùng Node 22.
+- **npm >= 10.** npm 9.2.0 chạy trên Node 22 gặp lỗi `ENOENT rename` trong cacache và
+  không cài được dependency.
+- Trên máy không phải git repo, `npm install` sẽ báo exit 1 ở script `prepare`
+  (`git config core.hooksPath` + `|| true` là cú pháp POSIX, không chạy trên cmd
+  Windows). Dependency vẫn cài đủ.
 
 ## Cấu trúc
 
 | Đường dẫn | Vai trò |
 | --- | --- |
-| `App.tsx` | Bottom Tabs: **Học Tập** ↔ **Góc Game**, bọc `AuthProvider` + `PlaytimeProvider` |
-| `context/AuthContext.tsx` | Supabase Auth: session, đăng nhập/đăng ký/đăng xuất, tự làm mới token |
-| `context/PlaytimeContext.tsx` | State dùng chung: điểm, số giây chơi game, đồng hồ đếm ngược, PIN phụ huynh, lưu AsyncStorage, đồng bộ Supabase |
-| `screens/QuizScreen.tsx` | Chọn môn → làm trắc nghiệm → phản hồi đúng/sai → tổng kết |
-| `screens/GameVaultScreen.tsx` | Đồng hồ đếm ngược, lưới trò chơi 2 cột, khoá khi hết giờ, khu vực phụ huynh cấp thêm giờ |
-| `screens/games/catalog.ts` | Danh sách trò chơi hiển thị trên lưới |
+| `App.tsx` | Bottom Tabs: **Học Tập** ↔ **Góc Game** ↔ **Cài Đặt**, bọc `AuthProvider` + `PlaytimeProvider` |
+| `components/Header.tsx` | Thanh trên cùng: logo, avatar, họ tên, badge khối lớp, chip điểm/phút |
+| `components/AppIcon.tsx` | Logo vẽ bằng `View` thuần — chồng sách + tay cầm game 3D + huy hiệu |
+| `components/GradePicker.tsx` | Hộp thoại chọn khối lớp 1-12 (lưới 4×3) |
+| `components/AvatarPicker.tsx` | Hộp thoại chọn avatar (12 emoji) |
+| `context/AuthContext.tsx` | Session, đăng nhập/đăng ký/đăng xuất, hồ sơ, mã PIN, khoá ứng dụng |
+| `context/PlaytimeContext.tsx` | Điểm, giây chơi game, đồng hồ, thống kê làm bài, hạn mức của phụ huynh |
+| `screens/QuizScreen.tsx` | Chọn môn → chọn tuần → làm bài → tổng kết. Lọc nội dung theo khối lớp |
+| `screens/GameVaultScreen.tsx` | Đồng hồ, lưới 5 trò chơi, màn khoá, khu vực phụ huynh |
+| `screens/SettingsScreen.tsx` | Hồ sơ, âm thanh, khu vực phụ huynh (sau PIN), phiên bản, đăng xuất |
+| `screens/AuthScreen.tsx` | Đăng nhập / Đăng ký (họ tên, tên đăng nhập, khối lớp, mật khẩu) |
+| `screens/PinGate.tsx` | Màn nhập PIN dùng lại cho khoá ứng dụng |
+| `screens/UpdateModal.tsx` | Thông báo bản APK mới, hỗ trợ cập nhật bắt buộc |
+| `screens/OtaUpdateModal.tsx` | Thông báo bản cập nhật ngầm, hiện ngay sau khi đăng nhập |
+| **Nội dung học** | |
+| `constants/curriculum.ts` | Sổ đăng ký lộ trình theo **khối lớp và môn** |
+| `constants/mathCurriculum.ts` | Toán Lớp 3 — 35 tuần, 501 câu |
+| `constants/vietnameseCurriculum.ts` | Tiếng Việt Lớp 3 — 35 tuần, 426 câu |
+| `constants/grade1Curriculum.ts` | Lớp 1 — Toán + Tiếng Việt, tuần 1-6, 60 câu |
+| `constants/grade2Curriculum.ts` | Lớp 2 — tuần 1-6, 60 câu |
+| `constants/grade4Curriculum.ts` | Lớp 4 — tuần 1-6, 60 câu |
+| `constants/grade5Curriculum.ts` | Lớp 5 — tuần 1-6, 60 câu |
+| `constants/mockData.ts` | 20 câu Tiếng Anh, hàm rút đề, hàm trộn lựa chọn, các hằng số quy đổi |
+| `lib/quizEngine.ts` | Rút đề ngẫu nhiên theo tuần, trộn đáp án, dựng lại đúng đề cũ |
+| **Trò chơi** | |
+| `screens/games/catalog.ts` | Danh sách 5 trò chơi trên lưới |
 | `screens/games/GameShell.tsx` | Khung chung: đồng hồ trong game, nút thoát, lớp phủ tạm dừng |
-| `screens/games/MarioMiniGame.tsx` | Runner: chạy tự động, 2 nút trái/phải + nút nhảy, né nấm/hố, ăn tiền vàng |
-| `screens/games/ColorSortGame.tsx` | Giao diện trò chơi sắp xếp màu |
-| `screens/games/PenaltyGame.tsx` | Đá penalty: chọn 1 trong 6 góc sút, thủ môn đổ người ngẫu nhiên |
-| `screens/games/colorSortLogic.ts` | Logic thuần của trò sắp xếp màu (sinh đề, luật đi, điều kiện thắng) |
-| `screens/AuthScreen.tsx` | Đăng nhập/đăng ký, chọn vai trò, PIN phụ huynh |
-| `screens/SettingsScreen.tsx` | Cài đặt: tên, đổi PIN, khoá app, phiên bản, đăng xuất |
-| `screens/PinGate.tsx` | Màn hình nhập PIN dùng lại cho khoá app và khu vực phụ huynh |
-| `screens/UpdateModal.tsx` | Thông báo bản mới, hỗ trợ cập nhật bắt buộc |
-| `lib/updateChecker.ts` | `checkAppUpdate()` — so phiên bản với máy chủ |
-| `constants/version.ts` | `APP_VERSION` và hàm so sánh phiên bản |
-| `api/account.ts` | Đổi tên, kiểm tra và đổi mã PIN |
-| `api/version.ts` | Phiên bản mới nhất, đọc từ bảng `app_version` |
-| `types/index.ts` | `Question`, `UserProgress`, `QuizResult`, `Subject`, … |
-| `constants/mathCurriculum.ts` | Lộ trình Toán 35 tuần + 126 câu |
-| `constants/vietnameseCurriculum.ts` | Lộ trình Tiếng Việt 35 tuần + 125 câu (Tập đọc / Luyện từ và câu / Chính tả) |
-| `constants/curriculum.ts` | Điểm truy cập chung cho mọi lộ trình theo tuần |
-| `lib/quizEngine.ts` | Rút đề ngẫu nhiên, trộn đáp án, dựng lại đúng đề cũ |
-| `constants/mockData.ts` | 20 câu Tiếng Anh, hàm rút đề, hàm trộn lựa chọn, các hằng số cấu hình |
+| `screens/games/MarioMiniGame.tsx` | Runner: né nấm và hố, ăn tiền vàng |
+| `screens/games/ColorSortGame.tsx` + `colorSortLogic.ts` | Sắp xếp màu, đề luôn có lời giải |
+| `screens/games/PenaltyGame.tsx` + `penaltyLogic.ts` | Đá penalty 5 lượt |
+| `screens/games/ZombieGame.tsx` + `zombieLogic.ts` | Bắn zombie, mua và nâng cấp súng |
+| `screens/games/RacingGame.tsx` + `racingLogic.ts` | Đua xe bằng cách trả lời câu hỏi của lộ trình |
+| **Dữ liệu & đồng bộ** | |
+| `lib/storage.ts` | Đọc/ghi tiến độ theo `userId`, hàng đợi đồng bộ, `resolveConflict` |
+| `lib/syncEngine.ts` | Lắng nghe NetInfo, đẩy hàng đợi, tự thử lại với backoff |
+| `lib/authApi.ts` | Client gọi `api/auth` + `api/account` + `api/progress`; tự chuyển Local Mode |
+| `lib/localAuth.ts` | Tài khoản chạy hoàn toàn trên máy (Local Mode) |
+| `lib/session.ts` | Lưu phiên đăng nhập và cài đặt khoá ứng dụng |
+| `lib/prefs.ts` | Cài đặt âm thanh / rung của thiết bị, hàm `vibrate()` |
+| `lib/authCrypto.ts` / `lib/pureCrypto.ts` | PBKDF2 phía server / phía máy |
+| `lib/turso.ts` | Tầng dữ liệu **Turso DB** (libSQL) — chỉ chạy phía server |
+| `db/schema.sql` | Schema Turso DB |
+| **API (Vercel Edge)** | |
+| `api/auth.ts` | Đăng ký / đăng nhập |
+| `api/account.ts` | Cập nhật hồ sơ, kiểm tra và đổi mã PIN |
+| `api/progress.ts` | Đọc / ghi tiến độ (Bearer token) |
+| `api/version.ts` / `api/check-version.ts` | Phiên bản mới nhất |
+| `api/download-apk.ts` | Chuyển hướng 302 tới APK mới nhất |
+| `api/manifest.ts` / `api/ota-asset.ts` | Máy chủ cập nhật ngầm (Expo Updates protocol v1) |
+| **Khác** | |
+| `services/updateService.ts` + `lib/otaUpdates.ts` | Kiểm tra và áp dụng bản cập nhật ngầm |
+| `lib/updateChecker.ts` + `constants/version.ts` | So phiên bản với máy chủ |
 | `constants/theme.ts` | Bảng màu, khoảng cách, ngưỡng tablet |
-| `lib/turso.ts` | Tầng dữ liệu Turso (libSQL) — chỉ chạy phía server |
-| `lib/progressApi.ts` | Client gọi `api/progress`, app chỉ dùng `fetch` |
-| `lib/deviceId.ts` | Id thiết bị 128-bit dùng khi chưa đăng nhập |
-| `api/progress.ts` | Vercel Edge function giữ token Turso, GET/PUT tiến độ |
-| `db/schema.sql` | Schema Turso |
+| `scripts/generate-icons.mjs` | Sinh toàn bộ icon PNG từ một mô tả hình học |
+| `scripts/bump-version.js` | Tăng phiên bản ở cả ba tệp |
+| `scripts/build-ota-manifest.mjs` | Sinh manifest Expo Updates trong CI |
 
-## Hệ thiết kế (EdTech 2026)
+## Hệ thiết kế
 
 `constants/theme.ts` là nguồn duy nhất cho màu, bo góc, bóng đổ và cỡ vùng chạm.
 
@@ -75,510 +107,337 @@ Sau đó:
 | `colors.reward` | `#F59E0B` | Điểm và phút thưởng |
 | `radius.md/lg/xl` | 16 / 20 / 28 | Bo góc mềm |
 | `touch.min` / `touch.primary` | 48 / 56 | Vùng chạm tối thiểu |
-| `elevation(1..3)` | shadow / elevation | Thẻ nổi |
+| `TAB_BAR_SPACE` | 96 | Khoảng chừa ở đáy cho thanh tab nổi |
+| `TABLET_BREAKPOINT` | 768 | Ngưỡng chuyển bố cục tablet |
 
-`touch.min = 48` không phải con số tuỳ hứng: học sinh 8 tuổi bấm chưa chính xác nên
-vùng chạm phải đạt tối thiểu 48dp theo hướng dẫn của Material.
+`touch.min = 48` không phải con số tuỳ hứng: học sinh nhỏ bấm chưa chính xác nên vùng
+chạm phải đạt tối thiểu 48dp theo hướng dẫn của Material.
 
 ### Bố cục cố định
 
 ```
-┌──────────────── Header cố định ────────────────┐
-│ Avatar · Xin chào [tên] · Badge · Chip phút · ⚙ │
-├────────────────────────────────────────────────┤
-│                                                │
-│           ScrollView cuộn ở giữa               │
-│                                                │
-├──── Tab nổi: Học Tập · Góc Game · Cài Đặt ─────┤
-└────────────────────────────────────────────────┘
+┌──── Header cố định: logo · avatar · họ tên · 🎓 Lớp · ⭐ · ⏱️ · ⚙ ────┐
+├──────────────────────────────────────────────────────────────────────┤
+│                        ScrollView cuộn ở giữa                        │
+├──────── Tab nổi: Học Tập · Góc Game · Cài Đặt ───────────────────────┤
+└──────────────────────────────────────────────────────────────────────┘
 ```
 
-Thanh tab dùng `position: absolute` với nền bán trong suốt (`colors.glass`) và bóng
-đổ, nên nội dung phải chừa `TAB_BAR_SPACE = 96` ở đáy — thiếu là dòng cuối bị khuất.
+Thanh tab dùng `position: absolute` với nền bán trong suốt (`colors.glass`), nên nội
+dung phải chừa `TAB_BAR_SPACE = 96` ở đáy — thiếu là dòng cuối bị khuất.
 
-> Không dùng blur thật: cần thêm `expo-blur` (native module) mà hiệu quả thị giác
-> gần như tương đương nền bán trong suốt + bóng đổ.
+> Không dùng blur thật: cần thêm `expo-blur` (native module) mà hiệu quả thị giác gần
+> như tương đương nền bán trong suốt + bóng đổ.
 
-### Phản hồi khi làm bài
+Header hiện **họ và tên**, không hiện tên đăng nhập — tên đăng nhập là chuỗi không dấu
+kiểu `minhkhang2026`, đọc lên không phải tên của ai cả. Nó chỉ xuất hiện ở màn hình
+Cài đặt, dạng chỉ đọc kèm icon khoá.
 
-Đáp án đúng tô xanh, sai tô đỏ **kèm rung ngang** cả khối đáp án — học sinh nhận ra
-ngay mà chưa cần đọc chữ.
+## Nội dung học theo khối lớp
 
-## Bộ sinh đề (`lib/quizEngine.ts`)
+Hồ sơ học sinh chọn được **Lớp 1 đến Lớp 12**, nhưng chỉ một phần có nội dung:
+
+| Khối lớp | Toán | Tiếng Việt | Ghi chú |
+| --- | --- | --- | --- |
+| Lớp 1 | 6 tuần / 30 câu | 6 tuần / 30 câu | Bộ Kết nối tri thức |
+| Lớp 2 | 6 tuần / 30 câu | 6 tuần / 30 câu | Bộ Kết nối tri thức |
+| **Lớp 3** | **35 tuần / 501 câu** | **35 tuần / 426 câu** | Bộ đề đầy đủ nhất |
+| Lớp 4 | 6 tuần / 30 câu | 6 tuần / 30 câu | Bộ Kết nối tri thức |
+| Lớp 5 | 6 tuần / 30 câu | 6 tuần / 30 câu | Bộ Kết nối tri thức |
+| Lớp 6-12 | — | — | Tạm dùng nội dung Lớp 3 |
+
+`contentGradeFor()` trong `constants/curriculum.ts` quy khối lớp chưa có nội dung về
+Lớp 3. Trả về danh sách rỗng thì màn hình Học Tập trống trơn, tệ hơn nhiều so với việc
+học sinh Lớp 8 tạm làm đề Lớp 3 — và màn hình có ghi rõ "(hồ sơ Lớp 8 chưa có bài
+riêng)" để không ai hiểu sai.
+
+Tiếng Anh **không gắn với khối lớp**: 20 câu trong `constants/mockData.ts`, rút đề ngẫu
+nhiên. `isGradeAgnosticSubject()` nhận ra điều đó bằng cách quét sổ đăng ký, nên mai này
+soạn lộ trình Tiếng Anh cho một lớp thì môn ấy tự động được lọc theo lớp.
+
+### Cách khai dữ liệu
+
+Các tệp lộ trình khai `WeekTopicSeed[]` (không có `grade`); khối lớp được gắn vào tại
+đúng chỗ đăng ký trong `constants/curriculum.ts`:
+
+```ts
+const CURRICULUMS = {
+  3: { 'Toán': withGrade(3, MATH_WEEKS), 'Tiếng Việt': withGrade(3, VIETNAMESE_WEEKS) },
+  // ...
+};
+```
+
+Làm vậy vì hai lẽ: dữ liệu Lớp 3 nằm trong hai tệp hơn 400 KB nên thêm một trường vào
+70 mục là sửa rất nhiều chỗ, và quan trọng hơn — một tuần không thể tự khai khối lớp
+lệch với chỗ nó được đăng ký.
+
+### Tiến độ tuần khoá theo khối lớp
+
+`completedWeeks` khoá theo **`"<khối lớp>:<môn>"`** — ví dụ `{"3:Toán": 9, "2:Tiếng Việt": 4}`.
+
+Trước bản 1.0.9 khoá chỉ là tên môn. Phải thêm khối lớp vì mỗi lớp có lộ trình riêng:
+giữ khoá cũ thì bé đang ở tuần 5 của Lớp 2 mà phụ huynh sửa hồ sơ sang Lớp 3 sẽ được
+coi như đã qua tuần 5 của Lớp 3 — nhảy mất bốn tuần đầu của một chương trình khác hẳn.
+
+`sanitizeWeekProgress()` trong `types/index.ts` lo việc nâng khoá cũ (`"Toán"`) lên dạng
+mới (`"3:Toán"`), nên **tiến độ Lớp 3 đã có không mất gì**. Hàm này khai một chỗ duy
+nhất vì trước đó có tới bốn bản sao gần giống nhau (storage, turso, api/progress,
+PlaytimeContext) — thêm khối lớp mà phải sửa đúng cả bốn là kiểu lỗi chỉ lộ ra ở một
+trong bốn đường đọc dữ liệu.
+
+### Bộ sinh đề (`lib/quizEngine.ts`)
 
 | Hàm | Tác dụng |
 | --- | --- |
-| `generateQuizForWeek(subject, week, mastered, count)` | Rút ngẫu nhiên tối đa 10 câu, ưu tiên câu chưa trả lời đúng, trộn đáp án |
+| `generateQuizForWeek(grade, subject, week, mastered, count)` | Rút ngẫu nhiên tối đa 10 câu, ưu tiên câu chưa trả lời đúng, trộn đáp án |
 | `rebuildQuiz(session)` | Dựng lại **đúng bộ câu cũ**, chỉ trộn lại vị trí đáp án |
-| `bankSize(subject, week)` | Số câu trong ngân hàng của tuần |
+| `bankSize(grade, subject, week)` | Số câu trong ngân hàng của tuần |
 
-Màn kết quả có hai nút:
-- **ĐỔI ĐỀ MỚI** — rút bộ câu khác trong ngân hàng của tuần
-- **LÀM LẠI ĐỀ NÀY** — giữ nguyên bộ câu, xoá lựa chọn cũ, trộn lại vị trí đáp án
+Màn kết quả có hai nút: **ĐỔI ĐỀ MỚI** (rút bộ khác) và **LÀM LẠI ĐỀ NÀY** (giữ nguyên
+bộ câu, xoá lựa chọn cũ, trộn lại vị trí đáp án).
 
-### Chống cày phần thưởng
+Hai hằng số dễ lẫn, cố ý đặt tên khác nhau:
 
-`REPEAT_ANSWER_GIVES_POINTS` và `REPEAT_ANSWER_GIVES_MINUTES` đều `false`: chỉ câu
-đúng **lần đầu** mới sinh điểm và phút chơi game. Làm lại vẫn được luyện tập và vẫn
-thấy đúng/sai, nhưng không tạo thêm phần thưởng — nếu không, chỉ cần lặp một đề dễ
-là có giờ chơi vô hạn.
-
-Ngân hàng nhỏ hơn 10 câu thì engine lấy hết chứ **không lặp câu** để cho đủ số.
-
-## Môn Toán — lộ trình 35 tuần
-
-Toán không rút đề ngẫu nhiên như hai môn còn lại mà đi theo **lộ trình 35 tuần**
-(`constants/mathCurriculum.ts`), chia thành 5 giai đoạn:
-
-| Tuần | Giai đoạn |
-| --- | --- |
-| 1–4 | Ôn tập & phép nhân, phép chia trong phạm vi 1000 |
-| 5–10 | Hình học & đơn vị đo (trung điểm, mm, gam, lít, góc vuông) |
-| 11–18 | Nhân, chia số có 2–3 chữ số với số có một chữ số; biểu thức; tìm x |
-| 19–25 | Các số đến 10 000, phép tính, tháng/năm, số La Mã |
-| 26–35 | Các số đến 100 000, diện tích, kiểm đếm số liệu, ôn tập cuối năm |
-
-Tuần 1–10 có **5 câu/tuần**, tuần 11–35 có **3 câu/tuần** (khung để mở rộng thêm) —
-tổng 126 câu Toán.
-
-### Luồng học
-
-**Học Tập → Toán → chọn tuần → làm bài.** Màn chọn tuần hiển thị 35 thẻ nhóm theo
-giai đoạn, mỗi thẻ có một trong ba trạng thái:
-
-| Trạng thái | Ý nghĩa |
-| --- | --- |
-| **Đã hoàn thành** | `weekNumber <= highestCompletedWeek` |
-| **Đang học** | `weekNumber === highestCompletedWeek + 1` |
-| **Khoá** | Các tuần sau đó — thẻ bị `disabled`, bấm không vào được |
-
-### Điều kiện qua tuần và phần thưởng
-
-- Cần đúng **>= 2/3 số câu** của tuần (`WEEK_PASS_RATIO = 2/3`): tuần 5 câu cần 4/5,
-  tuần 3 câu cần 2/3.
-  > Không dùng 0.7 vì với tuần 3 câu thì `ceil(3 x 0.7) = 3` — bắt học sinh 8 tuổi
-  > phải đúng tuyệt đối mới qua được là quá khắt khe.
-- Vượt qua tuần thì mở tuần kế tiếp và **thưởng `difficulty x 2` phút** chơi game
-  (2 phút cho tuần 1–10, 4 phút cho tuần 11–25, 6 phút cho tuần 26–35), cộng thêm
-  phút của từng câu đúng.
-- **Chỉ thưởng ở lần đầu** vượt qua tuần. Làm lại tuần cũ vẫn được cộng điểm nhưng
-  không cộng phút, để không thể lặp một tuần dễ nhằm lấy giờ chơi vô hạn.
-- Tiến độ (`highestCompletedWeek`) lưu trong AsyncStorage cùng các dữ liệu khác.
-  Phụ huynh bấm *Đặt lại điểm & thời gian* sẽ đưa tiến độ tuần về 0.
+- `QUESTIONS_PER_WEEK_QUIZ = 10` (`lib/quizEngine.ts`) — số câu mỗi đề của một **tuần**.
+- `QUESTIONS_PER_QUIZ = 6` (`constants/mockData.ts`) — số câu mỗi lượt của môn **rút đề
+  ngẫu nhiên**.
 
 ### Trộn thứ tự lựa chọn
 
-Mọi câu hỏi (cả ba môn) đều được trộn lại thứ tự A/B/C/D khi tạo đề
-(`shuffleQuestionOptions` trong `constants/mockData.ts`). Lý do: bộ đề tĩnh soạn tay
-rất khó phân bố đáp án đều — bản đầu của lộ trình Toán có đáp án **D chỉ xuất hiện
-3/125 lần**, học sinh hoàn toàn có thể đoán theo vị trí. Trộn khi tạo đề đưa phân bố
-về đều (lệch tối đa 2.8% so với 25%) và khiến làm lại cùng một câu không đoán được.
+Mọi câu hỏi đều được trộn lại thứ tự A/B/C/D khi tạo đề (`shuffleQuestionOptions`). Lý
+do: bộ đề tĩnh soạn tay rất khó phân bố đáp án đều — bản đầu của lộ trình Toán có đáp án
+**D chỉ xuất hiện 3/125 lần**, học sinh hoàn toàn có thể đoán theo vị trí. Trộn khi tạo
+đề đưa phân bố về đều và khiến làm lại cùng một câu không đoán được.
 
-## Môn Tiếng Việt — lộ trình 35 tuần
+Trong bốn tệp lộ trình mới (Lớp 1, 2, 4, 5), đáp án đúng luôn đặt ở vị trí đầu
+(`correctAnswer: 0`) — vị trí trong tệp không mang thông tin gì vì bộ trộn chạy ở mọi
+đường tạo đề.
 
-Giống môn Toán, Tiếng Việt cũng đi theo **lộ trình 35 tuần**
-(`constants/vietnameseCurriculum.ts`), chia thành 5 giai đoạn:
+### Điều kiện qua tuần và phần thưởng
 
-| Tuần | Giai đoạn |
+- Cần đúng **>= 2/3 số câu** của đề (`WEEK_PASS_RATIO = 2/3`).
+  > Không dùng 0.7 vì với đề 3 câu thì `ceil(3 × 0.7) = 3` — bắt học sinh phải đúng
+  > tuyệt đối mới qua được là quá khắt khe.
+- Vượt qua tuần thì mở tuần kế tiếp và thưởng **`difficulty × 2` phút**
+  (`WEEK_BONUS_MINUTES_PER_DIFFICULTY = 2`): Lớp 1-2 được 2 phút, Lớp 4 được 4 phút,
+  Lớp 5 được 6 phút.
+- **Chỉ thưởng ở lần đầu** vượt qua tuần. Làm lại tuần cũ vẫn được cộng điểm nhưng không
+  cộng phút, để không thể lặp một tuần dễ nhằm lấy giờ chơi vô hạn.
+
+### Chống cày phần thưởng
+
+`REPEAT_ANSWER_GIVES_POINTS` và `REPEAT_ANSWER_GIVES_MINUTES` đều `false`: chỉ câu đúng
+**lần đầu** mới sinh điểm và phút chơi game. Làm lại vẫn được luyện tập và vẫn thấy
+đúng/sai, nhưng không tạo thêm phần thưởng.
+
+Ngân hàng nhỏ hơn 10 câu thì engine lấy hết chứ **không lặp câu** để cho đủ số.
+
+## Góc Game — 5 trò chơi tích hợp
+
+Còn thời gian khả dụng thì Góc Game hiện lưới trò chơi; hết giờ thì lưới bị ẩn và thay
+bằng màn hình khoá.
+
+| Trò chơi | Nét chính |
 | --- | --- |
-| 1–4 | Mái trường em yêu |
-| 5–10 | Cộng đồng & Trái tim yêu thương |
-| 11–18 | Quê hương đất nước |
-| 19–27 | Nghệ thuật & Sáng tạo |
-| 28–35 | Trái Đất màu xanh & Ôn tập cuối năm |
-
-**125 câu**: tuần 1–10 có 5 câu, tuần 11–35 có 3 câu. Ba dạng bài, đánh dấu bằng
-trường `skill` và hiển thị thành nhãn cho học sinh:
-
-| Dạng | Số câu | Đặc điểm |
-| --- | --- | --- |
-| Luyện từ và câu | 83 | Từ loại, so sánh, nhân hoá, kiểu câu, dấu câu |
-| Chính tả | 31 | l/n, ch/tr, s/x, d/gi/r, iê/yê, dấu hỏi/ngã |
-| Tập đọc | 11 | Có `passage` — đoạn văn ngắn hiện phía trên câu hỏi |
-
-### Một lộ trình dùng chung cho mọi môn
-
-Trước đây tiến độ tuần là **một con số duy nhất dành cho Toán**
-(`highestCompletedWeek`). Thêm Tiếng Việt mà giữ cách đó thì mỗi môn mới lại phải
-thêm một cột trong DB, một field trong context và một nhánh `if` trong màn hình.
-
-Nên đã đổi thành map theo môn (`SubjectWeekProgress`) và gom mọi lộ trình vào
-`constants/curriculum.ts`:
-
-```ts
-getCurriculum(subject)      // lộ trình của môn, null nếu môn chưa có
-hasCurriculum(subject)      // môn này đi theo tuần hay rút đề ngẫu nhiên
-weekStatusFor(subject, week, completedWeeks)
-```
-
-`QuizScreen` không còn rẽ nhánh theo tên môn: môn nào `hasCurriculum` thì hiện màn
-chọn tuần, còn lại rút đề ngẫu nhiên. Thêm lộ trình Tiếng Anh sau này chỉ cần thêm
-một dòng vào `CURRICULUMS`.
-
-### Lưu tiến độ và đồng bộ
-
-- Local: `completedWeeks` nằm trong `StoredProgress`, lưu theo `userId`.
-- Turso: cột **`completed_weeks`** (JSON map) trong bảng `user_progress`. Cột
-  `completed_week` cũ vẫn được ghi bằng giá trị của môn Toán để dữ liệu cũ đọc được.
-- Migration tự chạy trong `initDatabase`: thêm cột mới rồi chuyển giá trị Toán cũ
-  sang map bằng `'{"Toán":' || completed_week || '}'` (nối chuỗi thay vì
-  `json_object()` để không phụ thuộc phần mở rộng JSON của SQLite).
-
-## Góc Game — 3 trò chơi tích hợp
-
-Khi còn thời gian khả dụng, Góc Game hiện **lưới 2 cột** gồm 3 ô trò chơi (icon,
-tên, nút "Chơi ngay"). Hết giờ thì lưới bị ẩn và thay bằng màn hình khoá.
-
-### Mario Mini (`screens/games/MarioMiniGame.tsx`)
-
-Runner viết bằng React Native thuần: `requestAnimationFrame` + các `View` định vị
-tuyệt đối, **không dùng WebView** nên chạy ngay trong Expo Go mà không cần rebuild,
-và chạy được cả trên web.
-
-- Nhân vật tự chạy (thế giới cuộn sang trái), điều khiển bằng 2 nút ◀ ▶ và nút NHẢY.
-- Chướng ngại vật: **nấm** (va vào là mất mạng) và **hố** (rơi xuống là mất mạng).
-- Ăn **tiền vàng** để tính điểm. 3 mạng, tốc độ tăng dần từ 180 lên tối đa 330 px/s.
-- `dt` mỗi khung được chặn ở 0.05s để nhân vật không "xuyên" qua chướng ngại vật khi
-  máy bị giật.
-
-### Sắp Xếp Màu (`screens/games/ColorSortGame.tsx`)
-
-- Chạm ống nguồn để chọn khối trên cùng, chạm ống đích để đặt xuống. Chỉ đặt được
-  khi ống đích rỗng hoặc khối trên cùng **cùng màu**.
-- Có nút **Hoàn tác** và **Đề khác**. Thắng khi mỗi màu nằm gọn trong một ống.
-- Mỗi khối có thêm **ký hiệu** (● ▲ ★ ■) để bạn nào khó phân biệt màu vẫn chơi được.
-- Màn 1–2: 3 màu / 4 ống. Từ màn 3: 4 màu / 5 ống.
-
-**Đề luôn có lời giải.** Đề được sinh bằng cách đi *ngược* từ trạng thái đã giải, mỗi
-bước ngược tương ứng đúng một nước đi thuận hợp lệ — nên chỉ cần đi ngược lại là
-giải được. Xáo trộn ngẫu nhiên thuần thì **không** đảm bảo điều này. Logic được tách
-sang `colorSortLogic.ts` để kiểm thử riêng bằng solver BFS.
-
-> Độ khó chững lại sau màn 3: không gian trạng thái của 4 màu / 5 ống là hữu hạn nên
-> tăng số bước xáo trộn không làm đề dài thêm (trung vị ~7–8 nước đi). Muốn khó hơn
-> nữa thì phải thêm màu thứ 5 (6 ống), lúc đó lưới ống sẽ chật trên màn hình điện thoại.
-
-### Đá Penalty (`screens/games/PenaltyGame.tsx`)
-
-- Khung thành, thủ môn và bóng ở chấm 11m, vẽ bằng `View` + `Animated` thuần.
-- Học sinh **chạm chọn 1 trong 6 góc sút** (trái/giữa/phải × trên/dưới). Thủ môn
-  đổ người ngẫu nhiên, không biết trước cú sút.
-- Một trận **5 lượt**, có bảng tỷ số từng lượt, hiệu ứng **"GOAL!"** khi ghi bàn
-  và lưu kỷ lục số bàn cao nhất.
-
-Luật cản bóng: cản chắc chắn nếu thủ môn đổ **đúng ô**; nếu **đúng cột nhưng sai
-tầm cao/thấp** thì cản với xác suất `SAVE_ON_SAME_COLUMN = 0.35`. Chỉ cản khi
-trùng đúng ô thì tỉ lệ cản là 1/6 — sút gần như luôn vào và mất hết hồi hộp; với
-con số này tỉ lệ cản khoảng 22%.
-
-> Spec cho phép "vuốt **hoặc** bấm chọn góc sút". Tôi chọn **chạm** vì rõ ràng
-> hơn với học sinh 8 tuổi và không cần `PanResponder`. Chưa hỗ trợ vuốt.
+| **Mario Mini** 🍄 | Runner viết bằng `requestAnimationFrame` + `View` tuyệt đối, không dùng WebView. Né nấm và hố, ăn tiền vàng, 3 mạng, tốc độ 180→330 px/s. `dt` chặn ở 0.05s để nhân vật không "xuyên" chướng ngại vật khi máy giật |
+| **Sắp Xếp Màu** 🧪 | Đề sinh bằng cách đi *ngược* từ trạng thái đã giải nên **luôn có lời giải** — xáo trộn ngẫu nhiên thuần thì không đảm bảo điều đó. Mỗi khối có thêm ký hiệu (● ▲ ★ ■) để bạn khó phân biệt màu vẫn chơi được |
+| **Đá Penalty** ⚽ | Chạm chọn 1 trong 6 góc sút, 5 lượt. Cản chắc chắn nếu thủ môn đổ đúng ô; đúng cột nhưng sai tầm thì cản với xác suất `SAVE_ON_SAME_COLUMN = 0.35` — chỉ cản khi trùng đúng ô thì tỉ lệ cản là 1/6, sút gần như luôn vào và mất hết hồi hộp |
+| **Bắn Zombie** 🧟 | Bắn zombie lấy vàng, mua súng mới và nâng cấp sức mạnh |
+| **Đua Xe Tri Thức** 🏁 | Trả lời đúng và nhanh để xe bứt phá. Câu hỏi lấy từ lộ trình của **chính khối lớp** học sinh đang học |
 
 ### Quản lý thời gian khi đang chơi
 
 | Tình huống | Hành vi |
 | --- | --- |
 | Mở một trò chơi | `startPlaying()` — đồng hồ bắt đầu trừ từng giây |
-| Đang chơi | Đồng hồ hiện ngay trên thanh tiêu đề của game, dưới 1 phút thì đổi sang màu đỏ |
+| Đang chơi | Đồng hồ hiện trên thanh tiêu đề game, dưới 1 phút thì đổi màu đỏ |
 | Thoát game | `pausePlaying()` — dừng trừ thời gian |
-| Rời khỏi ứng dụng | Đồng hồ dừng **và** trò chơi bị lớp phủ "Đang tạm dừng" che lại, nên không thể chơi mà không mất thời gian |
+| Rời khỏi ứng dụng | Đồng hồ dừng **và** trò chơi bị lớp phủ "Đang tạm dừng" che lại |
 | Quay lại ứng dụng | Đồng hồ chạy tiếp nếu trò chơi vẫn đang mở |
-| Thời gian về 0 | Trò chơi **tự đóng**, quay về màn hình khoá đòi làm bài tập Lớp 3 hoặc nhập PIN phụ huynh |
+| Hết giờ hoặc hết hạn mức ngày | Trò chơi **tự đóng**, quay về màn hình khoá |
 
-Ngoài lưới game vẫn còn nút **"Chỉ bấm giờ"** cho trường hợp chơi game *ngoài* ứng
-dụng — bấm để đồng hồ chạy mà không mở trò chơi nào.
+Ngoài lưới game còn nút **"Chỉ bấm giờ"** cho trường hợp chơi game *ngoài* ứng dụng.
 
-## Quy tắc quy đổi (đổi trong `constants/mockData.ts`)
+## Quy tắc quy đổi
+
+Đổi trong `constants/mockData.ts`:
 
 | Hằng số | Mặc định | Ý nghĩa |
 | --- | --- | --- |
 | `POINTS_PER_CORRECT` | `10` | Điểm cho mỗi câu đúng |
-| `QUESTIONS_PER_QUIZ` | `6` | Số câu mỗi lượt, rút ngẫu nhiên từ 20 câu của môn. Ưu tiên câu chưa từng trả lời đúng; hết mới quay lại câu cũ |
-| `rewardMinutes` (từng câu) | `2`–`3` | Số phút chơi game khi trả lời đúng |
-| `REPEAT_ANSWER_GIVES_MINUTES` | `false` | Câu đã từng đúng thì lần sau chỉ cộng điểm, không cộng phút (chống "farm" giờ chơi bằng cách làm lại). Đổi `true` nếu muốn cộng phút mọi lần. |
-| `MAX_ACCUMULATED_MINUTES` | `120` | Trần thời gian tích luỹ |
-| `WEEK_PASS_RATIO` | `2/3` | Tỉ lệ câu đúng tối thiểu để qua một tuần Toán (trong `mathCurriculum.ts`) |
-| `WEEK_BONUS_MINUTES_PER_DIFFICULTY` | `2` | Phút thưởng cho mỗi bậc độ khó của tuần (trong `mathCurriculum.ts`) |
-| `DEFAULT_PARENT_PIN` | `'1234'` | Mã PIN phụ huynh |
+| `QUESTIONS_PER_QUIZ` | `6` | Số câu mỗi lượt của môn rút đề ngẫu nhiên |
+| `rewardMinutes` (từng câu) | `2`–`3` | Phút chơi game khi trả lời đúng |
+| `MAX_ACCUMULATED_MINUTES` | `120` | Trần **ví** thời gian tích luỹ |
+| `REPEAT_ANSWER_GIVES_MINUTES` | `false` | Câu đã từng đúng thì lần sau chỉ cộng điểm |
 
-## Build APK Android bằng GitHub Actions
+### Cấu hình của phụ huynh
 
-Workflow `.github/workflows/android-apk.yml` tự chạy mỗi lần push lên `main`, hoặc
-bấm tay ở tab **Actions → Build APK Android → Run workflow**.
+Nằm sau mã PIN, lưu trong `parentSettings` và đồng bộ lên Turso DB:
 
-Lấy file APK: vào **Actions** → chọn lần chạy → mục **Artifacts** → tải
-`lop3-study-game-apk`. Giải nén rồi copy file `.apk` sang điện thoại/tablet, mở lên
-và cho phép *Cài đặt từ nguồn không xác định*.
-
-Quy trình trong CI: `npm ci` → `tsc --noEmit` → `expo prebuild --platform android`
-→ `gradlew assembleRelease` → kiểm tra chữ ký bằng `apksigner` → upload artifact.
-Thư mục `android/` **không** commit vào repo, mỗi lần build đều dựng lại từ
-`app.json` nên không bị lệch cấu hình. Chỉ build cho `arm64-v8a` và `armeabi-v7a`
-(máy thật) để nhẹ và nhanh hơn.
-
-### Chữ ký của APK — đọc trước khi phát hành
-
-Expo cấu hình sẵn buildType `release` ký bằng **`debug.keystore` đi kèm template**,
-nên APK ra là đã ký và cài được ngay mà không cần thêm secret nào. Nhưng:
-
-- **Dùng riêng trong nhà thì ổn** — cài lên máy của con hoặc gửi cho người thân.
-- **KHÔNG dùng để phát hành lên Google Play.** Play yêu cầu keystore riêng do bạn
-  giữ. Keystore debug là công khai, ai cũng có thể ký một APK giả mạo cùng package
-  `com.bamin7718.lop3studygame`.
-
-Muốn keystore riêng: tạo bằng
-`keytool -genkeypair -v -keystore my.keystore -alias upload -keyalg RSA -keysize 2048 -validity 10000`,
-rồi sửa `signingConfigs.release` trong `android/app/build.gradle` do prebuild sinh ra
-(cách gọn nhất là viết một Expo config plugin để tự áp dụng sau mỗi lần prebuild).
-
-### Cách khác: EAS Build
-
-`eas-cli` đã được cài trên máy dev. EAS quản lý keystore giúp bạn nên phù hợp hơn nếu
-định lên Play Store — đổi lại cần tài khoản Expo:
-
-```bash
-eas login && eas init && eas build -p android --profile preview
-```
-
-## Lưu ý về mức độ "khoá" thật
-
-Việc khoá ở đây là khoá **trong ứng dụng**: hết giờ thì màn hình Góc Game hiển thị
-lớp khoá và không cho bấm chơi. Đồng hồ tự tạm dừng khi app rời nền (`AppState`).
-Ứng dụng Expo không thể khoá các app game khác trên máy — muốn cưỡng chế ở cấp hệ
-điều hành thì cần native module (Android `UsageStatsManager` / Device Admin) và
-phải build development build thay vì Expo Go.
-
-## Kết nối Supabase (tuỳ chọn)
-
-Ứng dụng chạy **offline hoàn toàn** bằng AsyncStorage. Supabase chỉ để đồng bộ tiến
-độ giữa nhiều thiết bị.
-
-1. Sao chép `.env.example` → `.env`, điền `EXPO_PUBLIC_SUPABASE_URL` và
-   `EXPO_PUBLIC_SUPABASE_ANON_KEY`.
-2. Khởi động lại Metro để nạp biến môi trường: `npx expo start -c`.
-
-SQL khởi tạo bảng:
-
-```sql
-create table if not exists public.user_progress (
-  user_id uuid primary key references auth.users (id) on delete cascade,
-  total_points integer not null default 0,
-  accumulated_game_minutes integer not null default 0,
-  mastered_question_ids jsonb not null default '[]'::jsonb,
-  last_updated timestamptz not null default now()
-);
-
-create table if not exists public.quiz_results (
-  id text primary key,
-  user_id uuid not null references auth.users (id) on delete cascade,
-  subject text not null,
-  total_questions integer not null,
-  correct_count integer not null,
-  points_earned integer not null,
-  minutes_earned integer not null,
-  answers jsonb not null default '[]'::jsonb,
-  completed_at timestamptz not null default now()
-);
-
-alter table public.user_progress enable row level security;
-alter table public.quiz_results enable row level security;
-
-create policy "own progress" on public.user_progress
-  for all using (auth.uid() = user_id) with check (auth.uid() = user_id);
-
-create policy "own results" on public.quiz_results
-  for all using (auth.uid() = user_id) with check (auth.uid() = user_id);
-```
-
-## Phân quyền theo vai trò
-
-| Khu vực | Học sinh | Phụ huynh |
+| Cấu hình | Lựa chọn | Ý nghĩa |
 | --- | --- | --- |
-| Học tập, Góc Game, 3 trò chơi | ✅ | ✅ |
-| Khu vực "Phụ huynh cấp thêm giờ" | **Không render** | ✅ (cần PIN) |
-| Mục đổi mã PIN trong Cài đặt | **Không render** | ✅ |
-| Mục khoá ứng dụng | **Không render** | ✅ |
-| Đổi tên, xem phiên bản, đăng xuất | ✅ | ✅ |
+| `dailyLimitMinutes` | 0 / 15 / 30 / 45 / 60 / 90 / 120 | Trần phút **tiêu** trong một ngày. `0` = không giới hạn |
+| `rewardMultiplier` | ×0.5 / ×1 / ×1.5 / ×2 | Nhân phút thưởng mỗi câu đúng, làm tròn xuống |
 
-Với học sinh, khu vực phụ huynh **không được render** chứ không phải ẩn bằng style —
-không có ô PIN nào tồn tại trong cây component để dò ra.
+Hạn mức ngày khác `MAX_ACCUMULATED_MINUTES`: cái đó là trần cho ví thời gian, còn cái
+này giới hạn số phút được tiêu trong một ngày — con tích được 120 phút thì vẫn không
+chơi quá hạn mức ngày. Hết hạn mức thì Góc Game khoá kèm câu đúng lý do ("Hết hạn mức
+hôm nay", không phải "học thêm đi"), vì học thêm cũng không mở lại được hôm đó.
 
-### Mã PIN
+## Tài khoản và phân quyền
 
-PIN được **xác thực ở server** (`/api/account?action=verify-pin`), băm bằng PBKDF2
-giống mật khẩu. App không giữ PIN nên không thể đọc từ bundle.
+### Đăng ký tinh gọn
 
-> **Đánh đổi:** kiểm tra PIN **cần có mạng**. Trước đây PIN so với hằng số `'1234'`
-> ngay trong app nên chạy offline, nhưng hằng số đó nằm trong bundle công khai —
-> ai xem mã nguồn cũng biết. Đổi lấy: không đọc trộm được PIN, không brute-force
-> offline được; bù lại phụ huynh cần mạng khi cấp thêm giờ.
+Form đăng ký gồm đúng bốn mục: **Họ và tên** → **Tên đăng nhập** → **Khối lớp** →
+**Mật khẩu**. Không chọn vai trò, không nhập mã PIN.
+
+Vai trò được **chốt ở server** chứ không đọc từ body request: nếu `api/auth.ts` đọc
+`body.role` thì bất kỳ ai gửi `{"role":"parent"}` bằng curl là tự cấp quyền được. Mọi
+tài khoản mới là `student`; cột `role` chỉ còn để các tài khoản `parent` tạo từ bản cũ
+đăng nhập được.
+
+### Mã PIN là cổng, không phải vai trò
+
+Quyền vào khu vực phụ huynh dựa vào **mã PIN 4 số**, không dựa vào cột `role`. Phụ huynh
+đặt PIN sau, trong Cài đặt → Khu vực phụ huynh.
+
+| Khu vực | Chưa nhập PIN | Đã nhập PIN |
+| --- | --- | --- |
+| Học tập, Góc Game, 5 trò chơi | ✅ | ✅ |
+| Hồ sơ (avatar, họ tên, khối lớp), âm thanh | ✅ | ✅ |
+| Cấu hình thời gian chơi game | **Không render** | ✅ |
+| Đổi mã PIN | **Không render** | ✅ |
+| Báo cáo học tập | **Không render** | ✅ |
+| Khoá ứng dụng | **Không render** | ✅ |
+| "Phụ huynh cấp thêm giờ" trong Góc Game | **Không render** | ✅ |
+
+Các mục quản lý **không được render** chứ không phải ẩn bằng style — không có ô nào
+trong cây component để dò ra.
+
+PIN được xác thực ở server (`/api/account?action=verify-pin`), băm bằng PBKDF2 giống mật
+khẩu. App không giữ PIN nên không thể đọc từ bundle.
+
+> **Đánh đổi:** kiểm tra PIN **cần có mạng** (trừ Local Mode). Bù lại: không đọc trộm
+> được PIN, không brute-force ngoại tuyến được.
 
 Sau lần nhập đúng đầu tiên, trạng thái mở khoá được giữ **trong bộ nhớ** cho tới khi
-đóng app, nên không phải nhập lại liên tục. Mở lại app là phải nhập lại.
+đóng app.
 
 ### Khoá ứng dụng
 
-Tuỳ chọn trong Cài đặt (mặc định **tắt**). Bật lên thì mỗi lần mở app đều hỏi PIN —
-kể cả khi con muốn vào học, nên chỉ hợp khi máy dùng chung.
+Tuỳ chọn trong Cài đặt (mặc định **tắt**). Bật lên thì mỗi lần mở app đều hỏi PIN — kể
+cả khi con muốn vào học, nên chỉ hợp khi máy dùng chung.
 
-## Phiên bản và tự kiểm tra cập nhật
+### Mật khẩu và PIN
 
-Phiên bản hiện tại: **v1.0.1** (`constants/version.ts`, `app.json`, `package.json`).
-Hiện ở chân màn hình Đăng nhập và trong mục Cài đặt.
+Băm bằng **PBKDF2-SHA256** qua WebCrypto (`lib/authCrypto.ts`), lưu dạng
+`pbkdf2$<vòng>$<salt>$<hash>`, so sánh theo thời gian hằng số.
 
-### Luồng
+| Nơi | Số vòng | Vì sao |
+| --- | --- | --- |
+| Server (`api/*`) | 100 000 | Máy chủ có CPU, không ảnh hưởng trải nghiệm |
+| Local Mode (`lib/localAuth.ts`) | 10 000 | Android không có `crypto.subtle`, PBKDF2 phải chạy bằng JavaScript thuần; 100 000 vòng làm màn hình đăng nhập treo vài giây |
 
-1. Ngay khi có phiên đăng nhập (đăng nhập mới hoặc mở app đã có session),
-   `checkAppUpdate()` chạy **ngầm** — hỏng cũng không chặn app.
-2. Có bản mới hơn → hiện modal *"Đã có bản cập nhật mới (vX.Y.Z)!"* kèm
-   `release_notes` và nút **Tải về & Cập nhật ngay** (`Linking.openURL(apkUrl)`).
-3. `force_update = true` → **khoá hẳn**, không vào được app cho tới khi tải bản mới.
-4. Nút **Kiểm tra bản cập nhật** trong Cài đặt cho phép kiểm tra thủ công; đang mới
-   nhất thì báo *"Bạn đang sử dụng phiên bản mới nhất!"*.
-
-### Nguồn dữ liệu
-
-Theo thứ tự ưu tiên: `EXPO_PUBLIC_UPDATE_SERVER_URL` → `<API>/api/version` (bảng
-`app_version` trên Turso). JSON nhận cả `snake_case` lẫn `camelCase`:
-
-```json
-{ "version": "1.0.2", "apk_url": "https://...", "force_update": false, "release_notes": "..." }
-```
-
-Phát hành bản mới:
-
-```bash
-turso db shell min-bamin7718 \
-  "UPDATE app_version SET version='1.0.2', apk_url='https://.../app.apk', release_notes='Thêm game Đá Penalty' WHERE id=1"
-```
-
-So sánh phiên bản theo **số từng phần** chứ không so chuỗi — nếu so chuỗi thì
-`1.0.10` lại bị coi là cũ hơn `1.0.9`. Server báo phiên bản **cũ hơn** thì app im
-lặng, không làm phiền.
+Cố tình **không băm ở client** khi có server: nếu client băm thì chính cái hash trở thành
+mật khẩu.
 
 ## Kiến trúc Offline-First
 
-Ứng dụng coi **Local là nguồn dữ liệu chính**. Mọi thao tác của học sinh ghi xuống
-AsyncStorage trước; việc đẩy lên server là chuyện chạy ngầm.
+Ứng dụng coi **Local là nguồn dữ liệu chính**.
 
 ```
-Thao tác  ->  state React (tức thì)  ->  AsyncStorage  ->  sync_queue  ->  Turso
+Thao tác  ->  state React (tức thì)  ->  AsyncStorage  ->  sync_queue  ->  Turso DB
                     UI cập nhật ngay        nguồn chính      ngầm, có retry
 ```
 
 | File | Vai trò |
 | --- | --- |
-| `lib/storage.ts` | Đọc/ghi tiến độ theo `userId`, quản lý `sync_queue`, hàm `resolveConflict` |
+| `lib/storage.ts` | Đọc/ghi tiến độ theo `userId`, quản lý `sync_queue`, `resolveConflict` |
 | `lib/syncEngine.ts` | Lắng nghe NetInfo, đẩy hàng đợi, tự thử lại với backoff |
 
-### Hàng đợi gộp theo tài khoản
+**Hàng đợi gộp theo tài khoản.** Tiến độ là ảnh chụp toàn phần, không phải delta — nên
+chỉ ảnh chụp mới nhất của mỗi tài khoản là có ý nghĩa. `enqueueProgress` **thay thế** mục
+cũ cùng `userId` thay vì nối thêm: offline cả ngày thì hàng đợi vẫn chỉ có 1 mục, và
+không có nguy cơ một ảnh chụp cũ ghi đè lên ảnh chụp mới.
 
-Tiến độ là **ảnh chụp toàn phần**, không phải delta — nên chỉ ảnh chụp mới nhất của
-mỗi tài khoản là có ý nghĩa. `enqueueProgress` **thay thế** mục cũ cùng `userId` thay
-vì nối thêm. Hệ quả: offline cả ngày thì hàng đợi vẫn chỉ có 1 mục, và không có nguy
-cơ một ảnh chụp cũ ghi đè lên ảnh chụp mới.
+**Giải quyết xung đột.** `resolveConflict(localLastUpdated, remoteLastUpdated)` —
+timestamp mới nhất thắng. `localLastUpdated === null` (máy mới cài) thì luôn lấy dữ liệu
+server. So sánh bằng `Date.parse` chứ không so chuỗi, vì server trả `+00:00` còn `Date`
+trả `Z`.
 
-### Giải quyết xung đột
+**Thử lại khi lỗi.** Backoff 5s → 10s → 20s → … tối đa 5 phút. Trạng thái `offline` luôn
+thắng khi đặt status, để một lượt `flush()` đang dở không báo nhầm "đã đồng bộ" sau khi
+thiết bị đã rớt mạng.
 
-`resolveConflict(localLastUpdated, remoteLastUpdated)` — **timestamp mới nhất thắng**.
-`localLastUpdated === null` (máy mới cài) thì luôn lấy dữ liệu server. So sánh bằng
-`Date.parse` chứ không so chuỗi, vì server trả `+00:00` còn `Date` trả `Z`.
-
-### Thử lại khi lỗi
-
-Backoff 5s → 10s → 20s → … tối đa 5 phút. Mất mạng giữa chừng thì mục vẫn nằm trong
-hàng đợi, không mất dữ liệu. Trạng thái `offline` luôn thắng khi đặt status, để một
-lượt `flush()` đang dở không báo nhầm "đã đồng bộ" sau khi thiết bị đã rớt mạng.
-
-### Tối ưu render
-
-`WeekCard`, `WeekPicker`, `OptionButton`, `SubjectCard`, `GameGrid` đều bọc
-`React.memo`. Quan trọng nhất là `WeekCard`: khi đồng hồ chơi game chạy, context đổi
-mỗi giây, không memo thì **cả 35 thẻ tuần re-render mỗi giây**. `WeekCard` nhận
+**Tối ưu render.** `WeekCard`, `WeekPicker`, `OptionButton`, `SubjectCard`, `GameGrid`
+đều bọc `React.memo`. Quan trọng nhất là `WeekCard`: khi đồng hồ chạy, context đổi mỗi
+giây, không memo thì **cả 35 thẻ tuần re-render mỗi giây**. `WeekCard` nhận
 `onSelect(weekNumber)` thay vì closure `() => onChooseWeek(n)` để prop không đổi giữa
-các lần render — nếu vẫn dùng closure thì `React.memo` sẽ vô tác dụng.
+các lần render — dùng closure thì `React.memo` vô tác dụng.
 
-### Preload asset
+**Preload asset.** `App.tsx` nạp trước font icon Ionicons và ảnh trong `assets/`, nhưng
+**có hạn 2 giây** và bắt mọi lỗi: trên web `Asset.loadAsync`/`Font.loadAsync` đi qua
+mạng, mất mạng là chúng không bao giờ kết thúc — chặn UI chờ nó thì app đứng ở màn splash
+vĩnh viễn.
 
-`App.tsx` nạp trước font icon Ionicons và ảnh trong `assets/`, nhưng **có hạn 2 giây**
-và bắt mọi lỗi. Lý do: trên web `Asset.loadAsync`/`Font.loadAsync` đi qua mạng, mất
-mạng là chúng không bao giờ kết thúc — chặn UI chờ nó thì app đứng ở màn splash vĩnh
-viễn. Hết 2 giây là vào app, icon nạp sau cũng được.
+## Turso DB (libSQL)
 
-> Phần gamification hiện dùng emoji và `View` thuần, chưa có ảnh hay âm thanh khen
-> thưởng, nên preload ở đây thực chất chỉ có tác dụng với font icon.
+Database chính thức và duy nhất của dự án: `libsql://min-bamin7718.aws-ap-northeast-1.turso.io`
 
-### Không chặn UI khi khởi động
-
-Không còn màn chờ "đang tải tiến độ". Các màn hình hiện `…` / `--:--` ở chỗ số liệu
-khi chưa đọc xong Local, tránh vừa không chặn UI vừa không nháy số 0 sai.
-
-## Đăng nhập & phân quyền dữ liệu (Turso)
-
-Database: `libsql://min-bamin7718.aws-ap-northeast-1.turso.io`
-
-### Kiến trúc — và vì sao không nối trực tiếp từ app
+### Vì sao app không nối trực tiếp
 
 ```
-App (chỉ fetch + session token)  ->  /api/auth, /api/progress  ->  Turso
+App (chỉ fetch + session token)  ->  /api/auth, /api/account, /api/progress  ->  Turso DB
 ```
 
-Nối trực tiếp bằng `EXPO_PUBLIC_TURSO_AUTH_TOKEN` sẽ **vô hiệu hoá toàn bộ tính năng
-đăng nhập**, vì:
+Nối trực tiếp bằng `EXPO_PUBLIC_TURSO_AUTH_TOKEN` sẽ **vô hiệu hoá toàn bộ tính năng đăng
+nhập**, vì:
 
-- Token nằm trong bundle công khai, nên bảng `users` (kèm `password_hash`) ai cũng
-  đọc được. libSQL không có Row Level Security để chặn.
+- Tiền tố `EXPO_PUBLIC_` khiến Metro nhúng giá trị **thẳng vào bundle JavaScript** lúc
+  build. Token nằm trong APK, ai giải nén cũng đọc được.
+- Token Turso có **toàn quyền** đọc/ghi/xoá và libSQL **không có Row Level Security**.
+  Nên bảng `users` (kèm `password_hash`) ai cũng đọc được, và `DROP TABLE` được.
 - `WHERE user_id = ?` chạy ở client thì chính client chọn điều kiện — chỉ cần
   `SELECT * FROM user_progress` là lấy hết dữ liệu mọi học sinh.
 
 Nên điểm thực thi phân quyền đặt ở server: **`user_id` lấy TỪ session token đã ký
-HMAC**, không phải từ tham số client gửi lên. Client có sửa query string hay body thế
-nào cũng chỉ đọc/ghi được dòng của mình.
+HMAC**, không phải từ tham số client gửi lên.
+
+`lib/turso.ts` chỉ được `api/*` import; app không import nó, nhờ vậy `@libsql/client`
+không vào bundle app. Job `publish-ota` trong CI có một bước quét bundle đã xuất tìm
+`libsql://` / `TURSO_AUTH_TOKEN` để canh đúng chỗ này.
 
 ### Bảng
 
 | Bảng | Cột |
 | --- | --- |
-| `users` | `id`, `username` (UNIQUE), `password_hash`, `role` (`student`/`parent`), `pin_code`, `created_at` |
-| `user_progress` | `id`, `user_id` (FK), `subject`, `completed_week`, `total_points`, `accumulated_game_minutes`, `mastered_question_ids`, `updated_at`, UNIQUE(`user_id`,`subject`) |
-| `quiz_results` | lịch sử bài làm (chưa dùng) |
+| `users` | `id`, `username` (UNIQUE), `display_name`, `grade`, `avatar`, `password_hash`, `role`, `pin_code`, `created_at` |
+| `user_progress` | `id`, `user_id` (FK), `subject`, `completed_week`, `completed_weeks`, `total_points`, `accumulated_game_minutes`, `mastered_question_ids`, `answer_stats`, `parent_settings`, `updated_at`, UNIQUE(`user_id`,`subject`) |
+| `quiz_results` | Lịch sử bài làm (chưa dùng) |
+| `app_version` | Một dòng duy nhất (id = 1) mô tả bản phát hành mới nhất |
 
-Hai điểm lệch so với spec, đều có lý do:
+Vài điểm lệch so với spec ban đầu, đều có lý do:
 
-- Thêm `mastered_question_ids`: thiếu nó thì quy tắc "câu đã trả lời đúng không cộng
-  phút nữa" mất hiệu lực mỗi khi đổi thiết bị.
-- `subject` hiện luôn là `'chung'` (một dòng cho mỗi học sinh), vì điểm và phút chơi
-  game trong app là giá trị tổng chứ không tách theo môn. Giữ cột lại để sau tách
-  được mà không phải đổi schema.
+- `mastered_question_ids`: thiếu nó thì quy tắc "câu đã trả lời đúng không cộng phút nữa"
+  mất hiệu lực mỗi khi đổi thiết bị.
+- `subject` hiện luôn là `'chung'` (một dòng cho mỗi học sinh), vì điểm và phút chơi game
+  là giá trị tổng chứ không tách theo môn. Giữ cột lại để sau tách được mà không phải đổi
+  schema.
+- `answer_stats` chỉ lưu `{answered, correct}`; số câu sai = `answered - correct`. Giữ cả
+  ba thì chỉ cần một lần cộng lệch là ba số tự mâu thuẫn nhau.
 
-### Mật khẩu và PIN
-
-Băm bằng **PBKDF2-SHA256, 100 000 vòng, salt 16 byte ngẫu nhiên** qua WebCrypto
-(`lib/authCrypto.ts`), lưu dạng `pbkdf2$<vòng>$<salt>$<hash>`. PIN phụ huynh cũng
-băm, không lưu thô. So sánh hash theo thời gian hằng số.
-
-Cố tình **không băm ở client**: nếu client băm thì chính cái hash trở thành mật khẩu.
-
-### Session
-
-`api/auth` trả về token `<payload>.<HMAC-SHA256>` hạn 30 ngày, ký bằng `AUTH_SECRET`.
-App lưu vào AsyncStorage (`lib/session.ts`) nên mở lại app là vẫn đăng nhập.
-
-### Cách ly dữ liệu khi đổi tài khoản
-
-Dữ liệu cục bộ lưu theo khoá riêng từng tài khoản
-(`@lop3-study-game/progress-v2/<userId>`). Khi `userId` đổi, `PlaytimeContext` **xoá
-sạch state trước** rồi mới nạp tài khoản mới, nên không có khoảnh khắc nào hiện điểm
-hay giờ chơi của người trước.
+`initDatabase()` tự chạy migration mỗi lần gọi (thêm cột, chuyển schema cũ), nên không
+bao giờ phải dựng lại database bằng tay.
 
 ### Bật lên
 
-**1. Tạo bảng** (đã làm rồi cho `min-bamin7718`):
+**1. Tạo bảng:**
 ```bash
 turso db shell min-bamin7718 < db/schema.sql
 ```
 
-**2. Vercel → Settings → Environment Variables:**
+**2. Vercel → Settings → Environment Variables** (không có tiền tố `EXPO_PUBLIC_` nên
+chỉ server đọc được):
 
 | Biến | Giá trị |
 | --- | --- |
@@ -594,223 +453,146 @@ turso db shell min-bamin7718 < db/schema.sql
 
 | Endpoint | Tác dụng |
 | --- | --- |
-| `POST /api/auth?action=register` | `{username, password, role, pin?}` → session |
+| `POST /api/auth?action=register` | `{username, password, displayName, grade?}` → session |
 | `POST /api/auth?action=login` | `{username, password}` → session |
+| `POST /api/account?action=set-profile` | `{displayName?, grade?, avatar?}` → session |
+| `POST /api/account?action=verify-pin` | `{pin}` |
+| `POST /api/account?action=change-pin` | `{oldPin, newPin}` — chưa có PIN thì đây là lần đặt đầu |
 | `GET /api/progress` | Đọc tiến độ (Bearer token) |
 | `PUT /api/progress` | Ghi tiến độ (Bearer token) |
 
-Server không tin client: tên đăng nhập phải khớp `^[a-zA-Z0-9_.-]{3,24}$`, mật khẩu
->= 6 ký tự, PIN đúng 4 số, số âm về 0, `completed_week` kẹp ở 35, danh sách id cắt ở
-2000. Đăng nhập sai và tài khoản không tồn tại trả **cùng một thông báo** để không
+Server không tin client: tên đăng nhập phải khớp `^[a-zA-Z0-9_.-]{3,24}$`, mật khẩu >= 6
+ký tự, họ tên 2-48 ký tự, PIN đúng 4 số, khối lớp kẹp về 1-12, số âm về 0, danh sách id
+cắt ở 2000. Đăng nhập sai và tài khoản không tồn tại trả **cùng một thông báo** để không
 tiết lộ tên nào đang dùng.
 
-## Build APK Android bằng GitHub Actions
+### Local Mode
 
-Workflow `.github/workflows/android-apk.yml` tự chạy mỗi lần push lên `main`, hoặc
-bấm tay ở tab **Actions → Build APK Android → Run workflow**.
+Không cấu hình `EXPO_PUBLIC_PROGRESS_API_URL`, hoặc máy chủ không có API (ví dụ đang chạy
+Metro ở localhost — nó trả HTML cho mọi đường dẫn), thì `lib/authApi.ts` tự chuyển hướng
+sang `lib/localAuth.ts`. Đăng ký, đăng nhập, đổi hồ sơ, đặt PIN, tính giờ chơi game đều
+hoạt động; chỉ là dữ liệu nằm trên chính máy đó.
 
-Lấy file APK: vào **Actions** → chọn lần chạy → mục **Artifacts** → tải
-`lop3-study-game-apk`. Giải nén rồi copy file `.apk` sang điện thoại/tablet, mở lên
-và cho phép *Cài đặt từ nguồn không xác định*.
+Đây **không phải lỗi cấu hình** — với gia đình chỉ dùng một máy thì đó là chế độ chạy
+bình thường, nên màn hình Cài đặt gọi nó là "Chế độ lưu trên máy (Local Mode)".
 
-Quy trình trong CI: `npm ci` → `tsc --noEmit` → `expo prebuild --platform android`
-→ `gradlew assembleRelease` → kiểm tra chữ ký bằng `apksigner` → upload artifact.
-Thư mục `android/` **không** commit vào repo, mỗi lần build đều dựng lại từ
-`app.json` nên không bị lệch cấu hình. Chỉ build cho `arm64-v8a` và `armeabi-v7a`
-(máy thật) để nhẹ và nhanh hơn.
+## Cập nhật ứng dụng
 
-### Chữ ký của APK — đọc trước khi phát hành
+Hai đường, dùng cho hai loại thay đổi khác nhau:
 
-Expo cấu hình sẵn buildType `release` ký bằng **`debug.keystore` đi kèm template**,
-nên APK ra là đã ký và cài được ngay mà không cần thêm secret nào. Nhưng:
+| Đường | Đẩy được gì | Khi nào cần |
+| --- | --- | --- |
+| **Cập nhật ngầm (OTA)** | JavaScript và hình ảnh: đề bài mới, sửa giao diện, sửa luật chơi | Gần như mọi lần |
+| **Tải lại APK** | Cả phần native | Thêm/bỏ thư viện native, đổi icon launcher |
 
-- **Dùng riêng trong nhà thì ổn** — cài lên máy của con hoặc gửi cho người thân.
-- **KHÔNG dùng để phát hành lên Google Play.** Play yêu cầu keystore riêng do bạn
-  giữ. Keystore debug là công khai, ai cũng có thể ký một APK giả mạo cùng package
+### Cập nhật ngầm
+
+`expo-updates` + `api/manifest.ts` (Expo Updates protocol v1) + nhánh `ota` của repo.
+`runtimeVersion` theo chính sách **fingerprint**: Expo băm toàn bộ phần native, nên sửa
+JavaScript thì chuỗi này không đổi và bản OTA vẫn hợp với APK đang cài; thêm thư viện
+native thì nó đổi và máy cũ **tự động không nhận** bản OTA không hợp — thay vì nhận rồi
+crash.
+
+Luồng: có phiên đăng nhập → `checkForInAppUpdate()` chạy ngầm → có bản mới thì hiện
+`OtaUpdateModal` với nút **Cập nhật ngay** / **Để sau**. Cũng có nút **⚡ Cập nhật nhanh
+OTA** trong Cài đặt.
+
+Chế độ dev không cập nhật ngầm được (Metro đã lo việc nạp lại mã). Muốn xem thử hộp
+thoại: đặt `EXPO_PUBLIC_OTA_DEMO=1` rồi `npx expo start -c`.
+
+### Kiểm tra bản APK mới
+
+`checkAppUpdate()` so `APP_VERSION` với phiên bản máy chủ báo về, theo thứ tự ưu tiên:
+`EXPO_PUBLIC_UPDATE_SERVER_URL` → `<API>/api/check-version` (đọc GitHub Releases) →
+`<API>/api/version` (bảng `app_version` trên Turso DB).
+
+So sánh phiên bản theo **số từng phần** chứ không so chuỗi — so chuỗi thì `1.0.10` lại bị
+coi là cũ hơn `1.0.9`. Server báo phiên bản **cũ hơn** thì app im lặng.
+
+`force_update = true` → khoá hẳn, không vào được app cho tới khi tải bản mới.
+
+## CI/CD
+
+Workflow duy nhất: `.github/workflows/build-apk.yml`.
+
+| Trigger | Làm gì |
+| --- | --- |
+| push `main` (bỏ qua `**.md`) | Build APK → **artifact**, và phát hành OTA lên nhánh `ota` |
+| push tag `v*` | Build APK **và tạo GitHub Release** |
+| `workflow_dispatch` | Chạy tay, chỉ ra artifact |
+
+Phát hành:
+
+```bash
+npm run bump-version          # hoặc bump-minor / bump-major
+npx tsc --noEmit
+git commit -am "chore: 1.0.8"
+git tag v1.0.8                # PHẢI bằng version trong package.json
+git push origin main v1.0.8
+```
+
+Tải APK: `https://min-silk-iota.vercel.app/api/download-apk` (chuyển hướng tới
+`releases/latest/download/min-eg-app.apk`).
+
+**Chi tiết đầy đủ — danh sách secrets, cách sinh keystore base64, kết quả rà soát cấu
+hình, và ba chỗ công thức của SoFin không port sang được — xem
+[`DEVOPS_CHECKLIST.md`](./DEVOPS_CHECKLIST.md).** Công thức gốc ở
+[`BUILD-APK.md`](./BUILD-APK.md).
+
+### Chữ ký APK — đọc trước khi phát hành
+
+Template Expo kèm sẵn `android/app/debug.keystore` (một tệp thật, cố định) và cấu hình
+`release` dùng chính `signingConfigs.debug`, nên mọi lần build đều ký bằng cùng một khoá
+và người dùng cài đè được.
+
+- **Dùng riêng trong nhà thì ổn.**
+- **KHÔNG dùng để phát hành lên Google Play.** Khoá trong template là **công khai** (nằm
+  trong gói npm), ai cũng ký được một APK giả mạo cùng package
   `com.bamin7718.lop3studygame`.
 
-Muốn keystore riêng: tạo bằng
-`keytool -genkeypair -v -keystore my.keystore -alias upload -keyalg RSA -keysize 2048 -validity 10000`,
-rồi sửa `signingConfigs.release` trong `android/app/build.gradle` do prebuild sinh ra
-(cách gọn nhất là viết một Expo config plugin để tự áp dụng sau mỗi lần prebuild).
+Workflow ký đè bằng khoá của bạn (`ANDROID_DEBUG_KEYSTORE_B64`) và có một **cổng chặn
+chữ ký** đối chiếu vân tay SHA-256. Đổi khoá ký sẽ khiến người dùng bản cũ không cài đè
+được và phải gỡ app — mà gỡ app là xoá sạch AsyncStorage. Xem `DEVOPS_CHECKLIST.md` §2.4.
 
-### Cách khác: EAS Build
+## Giới hạn đã biết
 
-`eas-cli` đã được cài trên máy dev. EAS quản lý keystore giúp bạn nên phù hợp hơn nếu
-định lên Play Store — đổi lại cần tài khoản Expo:
+Những chỗ app **chưa** làm được, nói rõ để không ai hiểu sai:
 
-```bash
-eas login && eas init && eas build -p android --profile preview
-```
+**Khối lớp chỉ là dữ liệu hồ sơ ở Lớp 6-12.** Chọn Lớp 8 thì vẫn ra đề Lớp 3. Màn hình
+Học Tập có ghi rõ điều này.
 
-## Lưu ý về mức độ "khoá" thật
+**Chưa có nhạc nền.** Dự án không kèm tệp nhạc nào và không có thư viện phát nhạc. Công
+tắc "Nhạc nền" trong Cài đặt có, lưu được, nhưng `isBgmSupported()` trả `false` kèm giải
+thích trên UI. BGM thật cần `expo-audio` — là native module, nên `runtimeVersion` đổi và
+mọi máy đang cài mất đường cập nhật ngầm cho tới khi cài lại APK.
 
-Việc khoá ở đây là khoá **trong ứng dụng**: hết giờ thì màn hình Góc Game hiển thị
-lớp khoá và không cho bấm chơi. Đồng hồ tự tạm dừng khi app rời nền (`AppState`).
-Ứng dụng Expo không thể khoá các app game khác trên máy — muốn cưỡng chế ở cấp hệ
-điều hành thì cần native module (Android `UsageStatsManager` / Device Admin) và
-phải build development build thay vì Expo Go.
+**Hiệu ứng âm thanh chỉ kêu trên web.** `lib/gameSound.ts` sinh tiếng bằng Web Audio API;
+React Native trên Android không có API đó nên bản APK im lặng. **Rung thì thật** — dùng
+`Vibration` có sẵn trong React Native core.
 
-## Kết nối Supabase (tuỳ chọn)
+**Báo cáo học tập chỉ có dữ liệu từ bản 1.0.8.** Trước đó app chỉ lưu id câu đã đúng,
+không đếm câu sai.
 
-Ứng dụng chạy **offline hoàn toàn** bằng AsyncStorage. Supabase chỉ để đồng bộ tiến
-độ giữa nhiều thiết bị.
+**Hạn mức ngày tính riêng cho từng máy.** `dailyUsage` không đồng bộ lên server: tiến độ
+được đẩy lên dưới dạng ảnh chụp toàn phần với luật "mốc mới nhất thắng", nên nếu đồng bộ
+thì hai máy chơi song song sẽ liên tục ghi đè số giây của nhau. Đánh đổi: con đổi sang
+máy khác là được thêm một hạn mức nữa.
 
-1. Sao chép `.env.example` → `.env`, điền `EXPO_PUBLIC_SUPABASE_URL` và
-   `EXPO_PUBLIC_SUPABASE_ANON_KEY`.
-2. Khởi động lại Metro để nạp biến môi trường: `npx expo start -c`.
+**Khoá là khoá trong ứng dụng.** Hết giờ thì Góc Game hiển thị lớp khoá và không cho bấm
+chơi; đồng hồ tự tạm dừng khi app rời nền (`AppState`). Ứng dụng Expo **không thể khoá
+các app game khác** trên máy — muốn cưỡng chế ở cấp hệ điều hành thì cần native module
+(Android `UsageStatsManager` / Device Admin) và phải build development build thay vì
+Expo Go.
 
-SQL khởi tạo bảng:
+**Session lưu ở AsyncStorage không mã hoá.** Với thiết bị gia đình thì đủ dùng. Muốn mã
+hoá thì cần thêm `expo-secure-store`.
 
-```sql
-create table if not exists public.user_progress (
-  user_id uuid primary key references auth.users (id) on delete cascade,
-  total_points integer not null default 0,
-  accumulated_game_minutes integer not null default 0,
-  mastered_question_ids jsonb not null default '[]'::jsonb,
-  last_updated timestamptz not null default now()
-);
+**`quiz_results` chưa được ghi.** App hiện chỉ đồng bộ tiến độ tổng, chưa lưu lịch sử
+từng bài làm.
 
-create table if not exists public.quiz_results (
-  id text primary key,
-  user_id uuid not null references auth.users (id) on delete cascade,
-  subject text not null,
-  total_questions integer not null,
-  correct_count integer not null,
-  points_earned integer not null,
-  minutes_earned integer not null,
-  answers jsonb not null default '[]'::jsonb,
-  completed_at timestamptz not null default now()
-);
+**Đá Penalty chưa hỗ trợ vuốt.** Spec cho phép "vuốt hoặc bấm chọn góc sút"; chọn **chạm**
+vì rõ ràng hơn với học sinh nhỏ và không cần `PanResponder`.
 
-alter table public.user_progress enable row level security;
-alter table public.quiz_results enable row level security;
-
-create policy "own progress" on public.user_progress
-  for all using (auth.uid() = user_id) with check (auth.uid() = user_id);
-
-create policy "own results" on public.quiz_results
-  for all using (auth.uid() = user_id) with check (auth.uid() = user_id);
-```
-
-## Đồng bộ qua Turso (libSQL)
-
-Database: `libsql://min-bamin7718.aws-ap-northeast-1.turso.io`
-
-### Vì sao phải có serverless function ở giữa
-
-Token Turso cấp **toàn quyền đọc/ghi/xoá** cả database và libSQL **không có Row
-Level Security**. Khác với Supabase anon key (được thiết kế để công khai, có RLS
-chặn), nếu nhúng token Turso qua `EXPO_PUBLIC_*` thì nó nằm trong bundle công khai —
-bản web tại `min-hocchoi.vercel.app` ai mở DevTools cũng đọc được token rồi xoá sạch
-dữ liệu.
-
-Nên luồng là:
-
-```
-App (chỉ fetch)  ->  /api/progress (Edge, giữ token)  ->  Turso
-```
-
-App **không** import `lib/turso.ts`, nhờ vậy `@libsql/client` không vào bundle app.
-
-### Cách bật
-
-**1. Tạo bảng:**
-```bash
-turso db shell min-bamin7718 < db/schema.sql
-```
-
-**2. Tạo token và đặt vào Vercel** (Project → Settings → Environment Variables).
-Hai biến này **không** có tiền tố `EXPO_PUBLIC_` nên chỉ server đọc được:
-
-| Biến | Giá trị |
-| --- | --- |
-| `TURSO_DATABASE_URL` | `libsql://min-bamin7718.aws-ap-northeast-1.turso.io` |
-| `TURSO_AUTH_TOKEN` | kết quả của `turso db tokens create min-bamin7718` |
-
-**3. Trong `.env` của app** chỉ cần trỏ tới domain đã deploy:
-```
-EXPO_PUBLIC_PROGRESS_API_URL=https://min-hocchoi.vercel.app
-```
-Bản web cùng origin nên để trống cũng chạy.
-
-**4. Redeploy** để Vercel nạp biến môi trường mới.
-
-### Định danh học sinh
-
-| Tình huống | Khoá lưu tiến độ |
-| --- | --- |
-| Đã đăng nhập Supabase | `user.id` — dùng chung được giữa nhiều thiết bị |
-| Chưa đăng nhập | Device id ngẫu nhiên 128-bit trong AsyncStorage — chỉ sao lưu cho máy đó |
-
-Device id phải khó đoán vì Turso không có RLS: chính id là thứ duy nhất ngăn người
-khác đọc tiến độ của máy này. Muốn dùng chung tiến độ giữa web và APK thì **phải
-đăng nhập**.
-
-### API `api/progress`
-
-| Method | Tác dụng |
-| --- | --- |
-| `GET ?userId=...` | Đọc tiến độ, trả `{ progress: null }` nếu chưa có |
-| `PUT ?userId=...` | Ghi tiến độ (upsert) |
-
-Server không tin dữ liệu client: `userId` phải khớp `^[A-Za-z0-9_-]{16,64}$`, số âm
-bị đưa về 0, `highestCompletedWeek` bị kẹp ở 35, danh sách id bị cắt ở 2000 phần tử,
-`lastUpdated` sai định dạng bị thay bằng thời điểm hiện tại.
-
-### Khi chưa cấu hình
-
-App vẫn chạy đầy đủ offline. Màn **Tài khoản & đồng bộ** hiện "Đồng bộ thất bại —
-Không kết nối được tới máy chủ đồng bộ" và mọi tính năng học tập, đổi giờ, chơi game
-vẫn hoạt động bình thường.
-
-## Đăng nhập & đồng bộ (Supabase Auth)
-
-### Vào đâu để đăng nhập
-
-**Góc Game → Phụ huynh cấp thêm giờ → nhập PIN (`1234`) → Tài khoản & đồng bộ.**
-Màn hình tài khoản nằm sau mã PIN để học sinh không tự đăng xuất hay đổi tài khoản.
-
-### Cách hoạt động
-
-- **Phương thức**: email + mật khẩu (`signInWithPassword` / `signUp`). Không cần
-  deep link hay thư viện OAuth nào thêm, chạy được ngay trong Expo Go.
-- **Session được lưu** vào AsyncStorage (`persistSession: true`) nên mở lại app là
-  vẫn đăng nhập. Token chỉ tự làm mới khi app ở tiền cảnh
-  (`startAutoRefresh`/`stopAutoRefresh` theo `AppState`).
-- **Đăng nhập là tuỳ chọn.** Không cấu hình `.env` hoặc không đăng nhập thì app chạy
-  offline đầy đủ; trạng thái hiển thị là `disabled` / `signedOut`.
-
-### Quy tắc hợp nhất dữ liệu (`PlaytimeContext`)
-
-Khi đăng nhập, app so `last_updated` của server với mốc cục bộ:
-
-| Tình huống | Kết quả |
-| --- | --- |
-| Tài khoản chưa có bản ghi | Đẩy tiến độ của máy này lên |
-| Máy mới cài (chưa từng lưu gì) | Lấy dữ liệu server về |
-| `last_updated` của server mới hơn | Lấy dữ liệu server về |
-| Dữ liệu máy này mới hơn | Đẩy lên server |
-
-Sau đó mỗi thay đổi được đẩy lên với **throttle 15 giây** (không dùng debounce, vì
-trong lúc đồng hồ chạy tiến độ đổi mỗi giây nên debounce sẽ không bao giờ kịp chạy).
-Nút **Đồng bộ ngay** cho phép phụ huynh hợp nhất lại thủ công.
-
-### Hai giới hạn cần biết
-
-1. **`UserProgress` tính theo phút**, nên phần giây lẻ không được đồng bộ. Khi lấy dữ
-   liệu từ máy khác về, số giây dư bị làm tròn xuống (`floor`) — chọn `floor` để không
-   bao giờ tặng thêm thời gian chơi cho học sinh.
-2. **Session lưu ở AsyncStorage không mã hoá.** Với thiết bị gia đình thì đủ dùng.
-   Muốn mã hoá, làm theo `LargeSecureStore` trong docs Supabase (cần thêm
-   `expo-secure-store`, `aes-js`, `react-native-get-random-values`) rồi truyền vào
-   `auth.storage` trong `lib/supabase.ts`.
-
-### Lưu ý khi thử nghiệm
-
-Supabase **mặc định bắt xác nhận email** trước khi tạo session, nên `signUp` sẽ trả
-về `session = null` và app hiện thông báo "hãy mở email để xác nhận". Khi đang phát
-triển, có thể tắt ở **Authentication → Providers → Email → Confirm email**.
-
-`saveQuizResult` trong `lib/supabase.ts` đã sẵn sàng nhưng **chưa được gọi** — hiện
-app chỉ đồng bộ tiến độ tổng, chưa lưu lịch sử từng bài test.
+**Sắp Xếp Màu chững độ khó sau màn 3.** Không gian trạng thái của 4 màu / 5 ống là hữu
+hạn nên tăng số bước xáo trộn không làm đề dài thêm (trung vị ~7-8 nước đi). Muốn khó hơn
+phải thêm màu thứ 5 (6 ống), lúc đó lưới ống sẽ chật trên màn hình điện thoại.
