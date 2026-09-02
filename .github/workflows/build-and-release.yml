@@ -3,7 +3,8 @@ name: Build APK và tạo Release
 # Chạy khi push tag dạng v* (vd v1.0.2), khi push lên main, hoặc bấm tay.
 #
 # Thay thế luôn workflow "Build APK Android" cũ: nếu để cả hai thì mỗi lần push
-# lên main sẽ build APK hai lần, tốn khoảng 18 phút CI mà kết quả y nhau.
+# lên main sẽ build APK hai lần mà kết quả y nhau. Job APK build nguội mất hơn
+# 45 phút (xem ghi chú ở `timeout-minutes` của job build-and-release).
 on:
   push:
     branches: [main]
@@ -39,10 +40,10 @@ jobs:
 
     steps:
       - name: Lấy code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Cài Node 20
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v5
         with:
           node-version: 20
           cache: npm
@@ -128,7 +129,7 @@ jobs:
           ls -la manifests
 
       - name: Tải manifest lên artifact để soi khi cần
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: ota-manifest
           path: manifests/*.json
@@ -137,7 +138,17 @@ jobs:
 
   build-and-release:
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    # 90 phút, KHÔNG phải 45.
+    #
+    # Mốc 45 phút cũ tạo ra một vòng lặp tự khoá: `actions/cache` chỉ ghi cache ở
+    # post-job step, mà job bị timeout thì post-job step không bao giờ chạy. Nên
+    # cache Gradle chưa bao giờ được lưu — mỗi lượt đều biên dịch nguội từ đầu,
+    # vượt 45 phút, bị giết, và lại không lưu cache cho lượt sau. Kết quả: từ
+    # v1.0.2 tới v1.0.7 không lượt nào ra được APK.
+    #
+    # Lượt đầu với mốc mới sẽ chậm (build nguội) nhưng chạy xong và LƯU ĐƯỢC
+    # cache; các lượt sau tái dùng cache nên nhanh hơn nhiều.
+    timeout-minutes: 90
 
     # Metro nhúng biến EXPO_PUBLIC_* vào bundle NGAY LÚC BUILD. Tệp .env không
     # được commit (đúng, vì có token), nên nếu không khai ở đây thì bản APK ra
@@ -151,22 +162,22 @@ jobs:
 
     steps:
       - name: Lấy code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Cài Node 20
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v5
         with:
           node-version: 20
           cache: npm
 
       - name: Cài JDK 17
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: 17
 
       - name: Thiết lập Android SDK
-        uses: android-actions/setup-android@v3
+        uses: android-actions/setup-android@v4
 
       - name: Cài dependency
         run: npm ci
@@ -208,7 +219,7 @@ jobs:
         run: npx expo prebuild --platform android --no-install
 
       - name: Cache Gradle
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: |
             ~/.gradle/caches
@@ -249,7 +260,7 @@ jobs:
 
       # Giữ luôn artifact để tải được ngay từ tab Actions kể cả khi release lỗi
       - name: Tải APK lên artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: lop3-study-game-apk
           path: ${{ steps.apk.outputs.path }}
@@ -259,10 +270,10 @@ jobs:
       # prerelease: false + không phải draft ⇒ GitHub tự trỏ nhãn "latest" vào
       # release này, nên /releases/latest/download/app-release.apk luôn là bản mới.
       - name: Tạo hoặc cập nhật GitHub Release
-        uses: softprops/action-gh-release@v1
+        uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ steps.meta.outputs.tag }}
-          name: Học tập & Góc Game Lớp 3 ${{ steps.meta.outputs.tag }}
+          name: Min EG ${{ steps.meta.outputs.tag }}
           files: ${{ steps.apk.outputs.path }}
           draft: false
           prerelease: false
