@@ -254,6 +254,16 @@ export async function initDatabase(client: Client): Promise<void> {
       // không ghi đè giá trị mà người quản trị đã đặt.
       `INSERT OR IGNORE INTO app_version (id, version, apk_url, force_update, release_notes, updated_at)
        VALUES (1, '1.0.1', '', 0, '', datetime('now'))`,
+      `CREATE TABLE IF NOT EXISTS zombie_rooms (
+         code          TEXT PRIMARY KEY,
+         host_user_id  TEXT NOT NULL,
+         guest_user_id TEXT,
+         game_seed     INTEGER NOT NULL,
+         status        TEXT NOT NULL DEFAULT 'waiting',
+         host_input    TEXT NOT NULL DEFAULT '{}',
+         guest_input   TEXT NOT NULL DEFAULT '{}',
+         created_at    TEXT NOT NULL
+       )`,
     ],
     'write',
   );
@@ -557,5 +567,163 @@ export async function writeProgress(
       progress.lastUpdated,
       userId,
     ],
+  });
+}
+
+/* ------------------------------------------------------------------ */
+/* Bảng zombie_rooms — phòng chơi 2 người online                       */
+/* ------------------------------------------------------------------ */
+
+export interface ZombieRoomInput {
+  tick: number;
+  moveX: number;
+  moveY: number;
+  firing: boolean;
+  useBomb: boolean;
+}
+
+export interface ZombieRoomRecord {
+  code: string;
+  hostUserId: string;
+  guestUserId: string | null;
+  gameSeed: number;
+  status: 'waiting' | 'ready' | 'playing' | 'finished';
+  hostInput: ZombieRoomInput;
+  guestInput: ZombieRoomInput;
+}
+
+const EMPTY_ZINPUT: ZombieRoomInput = { tick: -1, moveX: 0, moveY: 0, firing: false, useBomb: false };
+
+function parseZInput(raw: unknown): ZombieRoomInput {
+  if (typeof raw !== 'string') return { ...EMPTY_ZINPUT };
+  try {
+    const p = JSON.parse(raw) as Record<string, unknown>;
+    return {
+      tick: typeof p.tick === 'number' ? Math.floor(p.tick) : -1,
+      moveX: typeof p.moveX === 'number' ? Math.max(-1, Math.min(1, p.moveX)) : 0,
+      moveY: typeof p.moveY === 'number' ? Math.max(-1, Math.min(1, p.moveY)) : 0,
+      firing: Boolean(p.firing),
+      useBomb: Boolean(p.useBomb),
+    };
+  } catch {
+    return { ...EMPTY_ZINPUT };
+  }
+}
+
+function rowToZRoom(row: Record<string, unknown>): ZombieRoomRecord {
+  const validStatus = ['waiting', 'ready', 'playing', 'finished'] as const;
+  const status = validStatus.includes(row.status as (typeof validStatus)[number])
+    ? (row.status as ZombieRoomRecord['status'])
+    : 'waiting';
+  return {
+    code: String(row.code),
+    hostUserId: String(row.host_user_id),
+    guestUserId: row.guest_user_id != null ? String(row.guest_user_id) : null,
+    gameSeed: toInt(row.game_seed),
+    status,
+    hostInput: parseZInput(row.host_input),
+    guestInput: parseZInput(row.guest_input),
+  };
+}
+
+export async function createZombieRoom(
+  client: Client,
+  code: string,
+  hostUserId: string,
+  seed: number,
+): Promise<void> {
+  const now = new Date().toISOString();
+  const empty = JSON.stringify(EMPTY_ZINPUT);
+  await client.execute({
+    sql: `INSERT INTO zombie_rooms (code, host_user_id, game_seed, status, host_input, guest_input, created_at)
+          VALUES (?, ?, ?, 'waiting', ?, ?, ?)`,
+    args: [code, hostUserId, seed, empty, empty, now],
+  });
+}
+
+export async function readZombieRoom(
+  client: Client,
+  code: string,
+): Promise<ZombieRoomRecord | null> {
+  const result = await client.execute({
+    sql: `SELECT * FROM zombie_rooms WHERE code = ?`,
+    args: [code],
+  });
+  const row = result.rows[0];
+  return row ? rowToZRoom(row as unknown as Record<string, unknown>) : null;
+}
+
+export async function joinZombieRoom(
+  client: Client,
+  code: string,
+  guestUserId: string,
+): Promise<ZombieRoomRecord | null> {
+  await client.execute({
+    sql: `UPDATE zombie_rooms SET guest_user_id = ?, status = 'ready'
+          WHERE code = ? AND status = 'waiting' AND guest_user_id IS NULL`,
+    args: [guestUserId, code],
+  });
+  const room = await readZombieRoom(client, code);
+  if (!room || room.guestUserId !== guestUserId) return null;
+  return room;
+}
+
+export async function startZombieRoom(
+  client: Client,
+  code: string,
+  hostUserId: string,
+): Promise<boolean> {
+  const result = await client.execute({
+    sql: `UPDATE zombie_rooms SET status = 'playing'
+          WHERE code = ? AND host_user_id = ? AND status = 'ready'`,
+    args: [code, hostUserId],
+  });
+  return (result.rowsAffected ?? 0) > 0;
+}
+
+export async function pushHostInput(
+  client: Client,
+  code: string,
+  hostUserId: string,
+  input: ZombieRoomInput,
+): Promise<ZombieRoomRecord | null> {
+  await client.execute({
+    sql: `UPDATE zombie_rooms SET host_input = ?
+          WHERE code = ? AND host_user_id = ? AND status = 'playing'`,
+    args: [JSON.stringify(input), code, hostUserId],
+  });
+  return readZombieRoom(client, code);
+}
+
+export async function pushGuestInput(
+  client: Client,
+  code: string,
+  guestUserId: string,
+  input: ZombieRoomInput,
+): Promise<ZombieRoomRecord | null> {
+  await client.execute({
+    sql: `UPDATE zombie_rooms SET guest_input = ?
+          WHERE code = ? AND guest_user_id = ? AND status = 'playing'`,
+    args: [JSON.stringify(input), code, guestUserId],
+  });
+  return readZombieRoom(client, code);
+}
+
+export async function closeZombieRoom(
+  client: Client,
+  code: string,
+  userId: string,
+): Promise<void> {
+  await client.execute({
+    sql: `UPDATE zombie_rooms SET status = 'finished'
+          WHERE code = ? AND (host_user_id = ? OR guest_user_id = ?)`,
+    args: [code, userId, userId],
+  });
+}
+
+export async function cleanupZombieRooms(client: Client): Promise<void> {
+  await client.execute({
+    sql: `DELETE FROM zombie_rooms WHERE created_at < datetime('now', '-30 minutes')`,
+    args: [],
   });
 }

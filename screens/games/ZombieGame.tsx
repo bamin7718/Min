@@ -5,13 +5,21 @@ import {
   Pressable,
   StyleSheet,
   Text,
+  TextInput,
   useWindowDimensions,
   View,
 } from 'react-native';
 
 import { colors, elevation, radius, spacing } from '../../constants/theme';
+import { useAuth } from '../../context/AuthContext';
 import { usePlaytime } from '../../context/PlaytimeContext';
 import { playGameSound, setGameSoundEnabled } from '../../lib/gameSound';
+import {
+  canPlayMultiplayer,
+  createZombieRoomApi,
+  joinZombieRoomApi,
+  ZombieRoomClient,
+} from '../../lib/zombieMultiplayer';
 import GameShell from './GameShell';
 import {
   advance,
@@ -44,7 +52,7 @@ const TOP_SCORES = 5;
 const JOYSTICK_SIZE = 116;
 const JOYSTICK_KNOB = 48;
 
-type Phase = 'start' | 'playing' | 'paused' | 'gameOver';
+type Phase = 'start' | 'playing' | 'paused' | 'gameOver' | 'online-lobby' | 'hosting' | 'guest-waiting';
 
 /**
  * Một ô trong lưới nâng cấp. `heal` không phải bậc nâng cấp mà là hành động mua
@@ -481,6 +489,19 @@ export default function ZombieGame({ onExit }: { onExit: () => void }) {
   const lastTimeRef = useRef(0);
   const noteTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
+  const { session } = useAuth();
+  const [mpRole, setMpRole] = useState<'host' | 'guest' | null>(null);
+  const [roomCode, setRoomCode] = useState('');
+  const [codeInput, setCodeInput] = useState('');
+  const [mpError, setMpError] = useState<string | null>(null);
+  const [hasGuest, setHasGuest] = useState(false);
+  const roomClientRef = useRef<ZombieRoomClient | null>(null);
+  const mpSeedRef = useRef<number | null>(null);
+  const mpTickRef = useRef(0);
+  const lastOpponentInputRef = useRef<{
+    moveX: number; moveY: number; firing: boolean; useBomb: boolean;
+  } | null>(null);
+
   const highScore = scores.length > 0 ? scores[0] : 0;
 
   /** Hiện một dòng nhắc ngắn rồi tự tắt — KHÔNG chặn game */
@@ -508,9 +529,13 @@ export default function ZombieGame({ onExit }: { onExit: () => void }) {
     );
   }, []);
 
-  const startRun = useCallback(() => {
-    worldRef.current = createWorld(area.width, area.height, Date.now() % 2147483647);
+  const startRun = useCallback((twoPlayer = false, seedOverride?: number) => {
+    const seed = seedOverride ?? Date.now() % 2147483647;
+    worldRef.current = createWorld(area.width, area.height, seed, twoPlayer);
     inputRef.current = { moveX: 0, moveY: 0, firing: false, fireOnce: false, useBomb: false };
+    lastOpponentInputRef.current = null;
+    mpTickRef.current = 0;
+    if (!twoPlayer) setMpRole(null);
     setFrame(snapshot(worldRef.current));
     setNote(null);
     setPhase('playing');
@@ -528,6 +553,52 @@ export default function ZombieGame({ onExit }: { onExit: () => void }) {
     setGameSoundEnabled(soundOn);
   }, [soundOn]);
 
+  // Nhả room khi unmount
+  useEffect(() => {
+    return () => { roomClientRef.current?.close(); };
+  }, []);
+
+  // Multiplayer: đẩy input của mình 10 lần/giây, nhận lại input đối phương
+  useEffect(() => {
+    const client = roomClientRef.current;
+    if (!client || phase !== 'playing' || !worldRef.current?.player2) return;
+    const interval = setInterval(async () => {
+      const inp = inputRef.current;
+      const tick = mpTickRef.current++;
+      const opp = await client.pushAndPull({
+        tick,
+        moveX: inp.moveX,
+        moveY: inp.moveY,
+        firing: inp.firing || inp.fireOnce,
+        useBomb: inp.useBomb,
+      });
+      if (opp) lastOpponentInputRef.current = opp;
+    }, 100);
+    return () => clearInterval(interval);
+  }, [phase]);
+
+  // Khách: poll chờ host bắt đầu
+  useEffect(() => {
+    const client = roomClientRef.current;
+    if (phase !== 'guest-waiting' || !client) return;
+    const interval = setInterval(async () => {
+      const status = await client.poll().catch(() => null);
+      if (status?.status === 'playing') startRun(true, mpSeedRef.current ?? undefined);
+    }, 1200);
+    return () => clearInterval(interval);
+  }, [phase, startRun]);
+
+  // Chủ phòng: poll chờ khách vào
+  useEffect(() => {
+    const client = roomClientRef.current;
+    if (phase !== 'hosting' || !client) return;
+    const interval = setInterval(async () => {
+      const status = await client.poll().catch(() => null);
+      if (status?.hasGuest) setHasGuest(true);
+    }, 1200);
+    return () => clearInterval(interval);
+  }, [phase]);
+
   // Vòng lặp game — chỉ chạy khi đồng hồ giờ chơi đang đếm
   useEffect(() => {
     if (!isPlaying || phase !== 'playing' || !worldRef.current) return;
@@ -544,12 +615,16 @@ export default function ZombieGame({ onExit }: { onExit: () => void }) {
       lastTimeRef.current = now;
 
       const input = inputRef.current;
+      const oppRaw = lastOpponentInputRef.current;
+      const input2 = world.player2
+        ? (oppRaw ?? { moveX: 0, moveY: 0, firing: false, useBomb: false })
+        : undefined;
       advance(world, dt, {
         moveX: input.moveX,
         moveY: input.moveY,
         firing: input.firing || input.fireOnce,
         useBomb: input.useBomb,
-      });
+      }, input2);
       // Hai cờ một nhịp: xoá NGAY sau advance để một lần bấm chỉ tính một lần
       input.fireOnce = false;
       input.useBomb = false;
@@ -561,6 +636,8 @@ export default function ZombieGame({ onExit }: { onExit: () => void }) {
         setScores((prev) =>
           [...prev, world.score].sort((a, b) => b - a).slice(0, TOP_SCORES),
         );
+        roomClientRef.current?.close();
+        roomClientRef.current = null;
         setPhase('gameOver');
         return;
       }
@@ -599,6 +676,60 @@ export default function ZombieGame({ onExit }: { onExit: () => void }) {
    */
   const handleBombPress = useCallback(() => {
     inputRef.current.useBomb = true;
+  }, []);
+
+  const handleCreateRoom = useCallback(async () => {
+    if (!session?.token) return;
+    setMpError(null);
+    try {
+      const { code, seed } = await createZombieRoomApi(session.token);
+      setRoomCode(code);
+      mpSeedRef.current = seed;
+      roomClientRef.current = new ZombieRoomClient(session.token, code, 'host');
+      setMpRole('host');
+      setHasGuest(false);
+      setPhase('hosting');
+    } catch (err) {
+      setMpError(err instanceof Error ? err.message : 'Lỗi tạo phòng');
+    }
+  }, [session?.token]);
+
+  const handleJoinRoom = useCallback(async () => {
+    if (!session?.token || !codeInput.trim()) return;
+    setMpError(null);
+    try {
+      const { code, seed } = await joinZombieRoomApi(session.token, codeInput.trim());
+      setRoomCode(code);
+      mpSeedRef.current = seed;
+      roomClientRef.current = new ZombieRoomClient(session.token, code, 'guest');
+      setMpRole('guest');
+      setPhase('guest-waiting');
+    } catch (err) {
+      setMpError(err instanceof Error ? err.message : 'Không tìm thấy phòng');
+    }
+  }, [session?.token, codeInput]);
+
+  const handleHostStart = useCallback(async () => {
+    const client = roomClientRef.current;
+    if (!client) return;
+    try {
+      await client.start();
+      startRun(true, mpSeedRef.current ?? undefined);
+    } catch (err) {
+      setMpError(err instanceof Error ? err.message : 'Lỗi bắt đầu');
+    }
+  }, [startRun]);
+
+  const handleCleanupRoom = useCallback(async () => {
+    const client = roomClientRef.current;
+    roomClientRef.current = null;
+    client?.close();
+    setMpRole(null);
+    setRoomCode('');
+    setCodeInput('');
+    setMpError(null);
+    setHasGuest(false);
+    setPhase('start');
   }, []);
 
   const togglePause = useCallback(() => {
@@ -672,7 +803,7 @@ export default function ZombieGame({ onExit }: { onExit: () => void }) {
   );
 
   const hpRatio = frame ? Math.max(0, frame.hp / frame.maxHp) : 1;
-  const inRun = phase !== 'start';
+  const inRun = phase === 'playing' || phase === 'paused' || phase === 'gameOver';
   /** Số bom tuyệt chiêu đang giữ; chưa có frame nào thì coi như 0 */
   const bombs = frame?.bombs ?? 0;
 
@@ -768,6 +899,37 @@ export default function ZombieGame({ onExit }: { onExit: () => void }) {
                 />
               )}
 
+              {/* Người chơi 2 */}
+              {frame.player2 && (
+                <View
+                  pointerEvents="none"
+                  style={[
+                    styles.entity,
+                    styles.player,
+                    {
+                      left: frame.player2.x - frame.player2.radius,
+                      top: frame.player2.y - frame.player2.radius,
+                      width: frame.player2.radius * 2,
+                      height: frame.player2.radius * 2,
+                      borderRadius: frame.player2.radius,
+                      opacity: frame.player2.invuln > 0 ? 0.5 : 1,
+                      borderColor: frame.player2.shield > 0 ? '#38BDF8' : '#86EFAC',
+                    },
+                  ]}
+                >
+                  <Text style={{ fontSize: frame.player2.radius * 1.35 }}>🧑‍🦰</Text>
+                </View>
+              )}
+              {frame.player2 && frame.player2.muzzleFlash > 0 && (
+                <MuzzleFlash
+                  x={frame.player2.x}
+                  y={frame.player2.y}
+                  aimX={frame.player2.aimX}
+                  aimY={frame.player2.aimY}
+                  radius={frame.player2.radius}
+                />
+              )}
+
               {/* Số vàng nảy lên, vẽ sau cùng để luôn nằm trên */}
               {frame.goldPops.map((g) => (
                 <GoldPopView key={g.id} x={g.x} y={g.y} amount={g.amount} ttl={g.ttl} />
@@ -794,6 +956,24 @@ export default function ZombieGame({ onExit }: { onExit: () => void }) {
                 {frame ? `${Math.ceil(frame.hp)}/${frame.maxHp}` : '--/--'}
               </Text>
             </View>
+            {frame?.player2 && (
+              <View style={styles.hpRow}>
+                <Text style={[styles.hpText, { width: 16 }]}>🧑‍🦰</Text>
+                <View style={styles.hpTrack}>
+                  <View
+                    style={[
+                      styles.hpFill,
+                      {
+                        width: `${Math.max(0, (frame.player2.hp / frame.player2.maxHp) * 100)}%`,
+                        backgroundColor:
+                          frame.player2.hp / frame.player2.maxHp > 0.5 ? '#86EFAC' : '#EF4444',
+                      },
+                    ]}
+                  />
+                </View>
+                <Text style={styles.hpText}>{Math.ceil(frame.player2.hp)}</Text>
+              </View>
+            )}
             <View style={styles.hudStatRow}>
               <Text style={styles.hudGold}>💰 ${frame ? frame.gold : 0}</Text>
               <Text style={styles.hudStat}>🌊 Wave {frame ? frame.wave : 0}</Text>
@@ -935,13 +1115,27 @@ export default function ZombieGame({ onExit }: { onExit: () => void }) {
                 bấm các ô nâng cấp bên dưới để mạnh lên mà không phải dừng trận.
               </Text>
               <Pressable
-                onPress={startRun}
+                onPress={() => startRun()}
                 accessibilityRole="button"
                 accessibilityLabel="Bắt đầu bắn zombie"
                 style={({ pressed }) => [styles.primaryButton, pressed && styles.pressed]}
               >
                 <Text style={styles.primaryButtonText}>BẮT ĐẦU</Text>
               </Pressable>
+              {canPlayMultiplayer && session && (
+                <Pressable
+                  onPress={() => setPhase('online-lobby')}
+                  accessibilityRole="button"
+                  accessibilityLabel="Chơi 2 người online"
+                  style={({ pressed }) => [
+                    styles.primaryButton,
+                    { backgroundColor: '#1E40AF' },
+                    pressed && styles.pressed,
+                  ]}
+                >
+                  <Text style={styles.primaryButtonText}>🌐 CHƠI 2 NGƯỜI</Text>
+                </Pressable>
+              )}
             </View>
           )}
 
@@ -991,12 +1185,104 @@ export default function ZombieGame({ onExit }: { onExit: () => void }) {
               </View>
 
               <Pressable
-                onPress={startRun}
+                onPress={() => startRun()}
                 accessibilityRole="button"
                 accessibilityLabel="Chơi lại"
                 style={({ pressed }) => [styles.primaryButton, pressed && styles.pressed]}
               >
                 <Text style={styles.primaryButtonText}>CHƠI LẠI</Text>
+              </Pressable>
+            </View>
+          )}
+
+          {/* ---- Lobby online: chọn tạo hoặc vào phòng ---- */}
+          {phase === 'online-lobby' && (
+            <View style={styles.overlay}>
+              <Text style={styles.overlayEmoji}>🌐</Text>
+              <Text style={styles.overlayTitle}>Chơi 2 Người Online</Text>
+              {mpError ? <Text style={styles.mpError}>{mpError}</Text> : null}
+              <Pressable
+                onPress={handleCreateRoom}
+                accessibilityRole="button"
+                style={({ pressed }) => [styles.primaryButton, pressed && styles.pressed]}
+              >
+                <Text style={styles.primaryButtonText}>TẠO PHÒNG MỚI</Text>
+              </Pressable>
+              <Text style={styles.overlayText}>— hoặc nhập mã phòng để vào —</Text>
+              <TextInput
+                value={codeInput}
+                onChangeText={(t) => setCodeInput(t.toUpperCase())}
+                placeholder="VD: ABCD23"
+                placeholderTextColor="#64748B"
+                autoCapitalize="characters"
+                maxLength={6}
+                style={styles.codeInput}
+              />
+              <Pressable
+                onPress={handleJoinRoom}
+                disabled={codeInput.length < 6}
+                accessibilityRole="button"
+                style={({ pressed }) => [
+                  styles.primaryButton,
+                  { backgroundColor: '#1E40AF' },
+                  codeInput.length < 6 && { opacity: 0.45 },
+                  pressed && styles.pressed,
+                ]}
+              >
+                <Text style={styles.primaryButtonText}>VÀO PHÒNG</Text>
+              </Pressable>
+              <Pressable
+                onPress={() => { setMpError(null); setPhase('start'); }}
+                style={({ pressed }) => [pressed && styles.pressed]}
+              >
+                <Text style={styles.backLink}>← Quay lại</Text>
+              </Pressable>
+            </View>
+          )}
+
+          {/* ---- Chờ khách vào (host) ---- */}
+          {phase === 'hosting' && (
+            <View style={styles.overlay}>
+              <Text style={styles.overlayEmoji}>🏠</Text>
+              <Text style={styles.overlayTitle}>Mã phòng của em</Text>
+              <Text style={styles.roomCodeText}>{roomCode}</Text>
+              <Text style={styles.overlayText}>Nhờ bạn nhập mã này trên máy của họ</Text>
+              {hasGuest ? (
+                <>
+                  <Text style={styles.guestReady}>✅ Bạn đã vào phòng!</Text>
+                  {mpError ? <Text style={styles.mpError}>{mpError}</Text> : null}
+                  <Pressable
+                    onPress={handleHostStart}
+                    accessibilityRole="button"
+                    style={({ pressed }) => [styles.primaryButton, pressed && styles.pressed]}
+                  >
+                    <Text style={styles.primaryButtonText}>BẮT ĐẦU TRẬN</Text>
+                  </Pressable>
+                </>
+              ) : (
+                <Text style={styles.overlayText}>Đang chờ bạn vào...</Text>
+              )}
+              <Pressable
+                onPress={handleCleanupRoom}
+                style={({ pressed }) => [pressed && styles.pressed]}
+              >
+                <Text style={styles.backLink}>← Huỷ phòng</Text>
+              </Pressable>
+            </View>
+          )}
+
+          {/* ---- Chờ host bắt đầu (guest) ---- */}
+          {phase === 'guest-waiting' && (
+            <View style={styles.overlay}>
+              <Text style={styles.overlayEmoji}>⏳</Text>
+              <Text style={styles.overlayTitle}>Đã vào phòng</Text>
+              <Text style={styles.roomCodeText}>{roomCode}</Text>
+              <Text style={styles.overlayText}>Đang chờ bạn bắt đầu trận...</Text>
+              <Pressable
+                onPress={handleCleanupRoom}
+                style={({ pressed }) => [pressed && styles.pressed]}
+              >
+                <Text style={styles.backLink}>← Thoát phòng</Text>
               </Pressable>
             </View>
           )}
@@ -1337,6 +1623,30 @@ const styles = StyleSheet.create({
     textAlign: 'center',
   },
   pressed: { opacity: 0.7 },
+
+  codeInput: {
+    alignSelf: 'stretch',
+    borderWidth: 2,
+    borderColor: '#334155',
+    borderRadius: radius.md,
+    padding: spacing.sm,
+    color: '#FFFFFF',
+    fontSize: 22,
+    fontWeight: '800',
+    textAlign: 'center',
+    letterSpacing: 8,
+    backgroundColor: 'rgba(255,255,255,0.08)',
+  },
+  roomCodeText: {
+    fontSize: 36,
+    fontWeight: '800',
+    color: '#FDE047',
+    letterSpacing: 10,
+    marginVertical: 4,
+  },
+  mpError: { fontSize: 12, color: '#F87171', textAlign: 'center' },
+  guestReady: { fontSize: 13, fontWeight: '700', color: '#86EFAC' },
+  backLink: { color: '#94A3B8', fontSize: 13, textDecorationLine: 'underline' },
 
   /* ---- Lưới nâng cấp: 2 cột × 4 hàng, nền tối như mẫu ---- */
   grid: { flexDirection: 'row', flexWrap: 'wrap', gap: 6 },

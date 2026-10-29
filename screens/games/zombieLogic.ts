@@ -202,6 +202,8 @@ export interface World {
   weapon: WeaponId;
   ownedWeapons: WeaponId[];
   fireCd: number;
+  fireCd2: number;
+  player2?: Player;
   upgrades: Record<UpgradeId, number>;
 
   status: 'playing' | 'gameOver';
@@ -585,7 +587,7 @@ export function maxHpOf(world: World): number {
 /* Tạo thế giới                                                        */
 /* ------------------------------------------------------------------ */
 
-export function createWorld(areaW: number, areaH: number, seed = 20260901): World {
+export function createWorld(areaW: number, areaH: number, seed = 20260901, twoPlayer = false): World {
   const world: World = {
     areaW,
     areaH,
@@ -627,6 +629,7 @@ export function createWorld(areaW: number, areaH: number, seed = 20260901): Worl
     weapon: 'pistol',
     ownedWeapons: ['pistol'],
     fireCd: 0,
+    fireCd2: 0,
     upgrades: {
       damage: 0,
       fireRate: 0,
@@ -642,6 +645,23 @@ export function createWorld(areaW: number, areaH: number, seed = 20260901): Worl
     nextId: 1,
     seed,
   };
+  if (twoPlayer) {
+    world.player2 = {
+      x: clamp(areaW / 2 + 50, 18, areaW - 18),
+      y: areaH / 2,
+      radius: 18,
+      hp: 100,
+      maxHp: 100,
+      invuln: 0,
+      aimX: 0,
+      aimY: -1,
+      shield: 0,
+      frenzy: 0,
+      muzzleFlash: 0,
+      lockedTargetId: null,
+      bombs: 0,
+    };
+  }
   return world;
 }
 
@@ -747,6 +767,87 @@ export function nearestZombie(world: World): Zombie | null {
     }
   }
   return best;
+}
+
+/** Người chơi gần vị trí (x, y) nhất — P1 hoặc P2 nếu đang chơi 2 người */
+export function nearestPlayerTo(world: World, x: number, y: number): Player {
+  const p1 = world.player;
+  if (!world.player2) return p1;
+  return dist(x, y, world.player2.x, world.player2.y) < dist(x, y, p1.x, p1.y)
+    ? world.player2
+    : p1;
+}
+
+function nearestZombieFromPos(world: World, x: number, y: number): Zombie | null {
+  let best: Zombie | null = null;
+  let bestD = Infinity;
+  for (const z of world.zombies) {
+    const d = dist(z.x, z.y, x, y);
+    if (d < bestD) { bestD = d; best = z; }
+  }
+  return best;
+}
+
+function fireP2(world: World): void {
+  const p2 = world.player2;
+  if (!p2) return;
+  const spec = WEAPONS[world.weapon];
+  const target = nearestZombieFromPos(world, p2.x, p2.y);
+
+  let dirX = p2.aimX;
+  let dirY = p2.aimY;
+  if (target) {
+    const d = dist(target.x, target.y, p2.x, p2.y) || 1;
+    dirX = (target.x - p2.x) / d;
+    dirY = (target.y - p2.y) / d;
+    p2.aimX = dirX;
+    p2.aimY = dirY;
+  }
+  if (!Number.isFinite(dirX) || !Number.isFinite(dirY) || Math.hypot(dirX, dirY) < 0.01) {
+    dirX = 0;
+    dirY = -1;
+  }
+
+  const baseAngle = Math.atan2(dirY, dirX);
+  const shots = spec.pellets + world.upgrades.multishot;
+  const baseDamage = bulletDamage(world);
+  const pierce = spec.pierce + world.upgrades.pierce;
+
+  p2.lockedTargetId = target ? target.id : null;
+  p2.muzzleFlash = 0.06;
+
+  for (let i = 0; i < shots; i++) {
+    if (world.bullets.length >= MAX_BULLETS) break;
+    const offset =
+      shots === 1
+        ? 0
+        : (i / (shots - 1) - 0.5) * (spec.spread > 0 ? spec.spread * 2 : 0.3);
+    const jitter = spec.jitter ? (rand(world) * 2 - 1) * spec.jitter : 0;
+    const angle = baseAngle + offset + jitter;
+    const crit = spec.critChance ? rand(world) < spec.critChance : false;
+    const damage = crit ? baseDamage * (spec.critMultiplier ?? 2) : baseDamage;
+    world.bullets.push({
+      id: world.nextId++,
+      x: p2.x,
+      y: p2.y,
+      vx: Math.cos(angle) * spec.bulletSpeed,
+      vy: Math.sin(angle) * spec.bulletSpeed,
+      damage,
+      look: crit ? 'crit' : spec.tracer ? 'tracer' : 'normal',
+      pierce,
+      radius: spec.bulletRadius,
+      hitIds: [],
+    });
+  }
+  world.fireCd2 = fireInterval(world);
+}
+
+function hurtPlayer2(world: World, amount: number): void {
+  const p2 = world.player2;
+  if (!p2 || p2.shield > 0 || p2.invuln > 0) return;
+  p2.hp = Math.max(0, p2.hp - amount);
+  p2.invuln = 0.6;
+  pushEvent(world, 'hurt');
 }
 
 function spawnParticles(
@@ -982,7 +1083,7 @@ function killZombie(world: World, z: Zombie): void {
 /* Vòng cập nhật                                                       */
 /* ------------------------------------------------------------------ */
 
-export function advance(world: World, dt: number, input: Input): void {
+export function advance(world: World, dt: number, input: Input, input2?: Input): void {
   if (world.status !== 'playing') return;
 
   const p = world.player;
@@ -1012,6 +1113,29 @@ export function advance(world: World, dt: number, input: Input): void {
   if (input.useBomb) detonateBomb(world);
 
   if (input.firing && world.fireCd <= 0) fire(world);
+
+  /* ---- Người chơi 2 ---- */
+  if (world.player2 && input2) {
+    const p2 = world.player2;
+    const ml2 = Math.hypot(input2.moveX, input2.moveY);
+    if (ml2 > 0.02) {
+      const nx = input2.moveX / ml2;
+      const ny = input2.moveY / ml2;
+      const speed = playerSpeed(world) * Math.min(1, ml2);
+      p2.x = clamp(p2.x + nx * speed * dt, p2.radius, world.areaW - p2.radius);
+      p2.y = clamp(p2.y + ny * speed * dt, p2.radius, world.areaH - p2.radius);
+      p2.aimX = nx;
+      p2.aimY = ny;
+    }
+    p2.invuln = Math.max(0, p2.invuln - dt);
+    p2.shield = Math.max(0, p2.shield - dt);
+    p2.frenzy = Math.max(0, p2.frenzy - dt);
+    p2.muzzleFlash = Math.max(0, p2.muzzleFlash - dt);
+    p2.maxHp = maxHpOf(world);
+    world.fireCd2 = Math.max(0, world.fireCd2 - dt);
+    if (input2.useBomb) detonateBomb(world);
+    if (input2.firing && world.fireCd2 <= 0) fireP2(world);
+  }
 
   /* ---- Đạn của người chơi ---- */
   for (let i = world.bullets.length - 1; i >= 0; i--) {
@@ -1060,15 +1184,14 @@ export function advance(world: World, dt: number, input: Input): void {
       continue;
     }
 
-    // Đi về phía người chơi, nhưng DỪNG ở khoảng chạm. Nếu cho đi tới tận tâm
-    // thì cả đàn chồng lên nhau thành một cục ở giữa người chơi, trông rất tệ
-    // và làm phần bắn khó tính đúng.
-    const d = dist(z.x, z.y, p.x, p.y) || 0.001;
-    const contact = z.radius + p.radius;
+    // Đi về phía người chơi gần nhất, nhưng DỪNG ở khoảng chạm.
+    const zt = nearestPlayerTo(world, z.x, z.y);
+    const d = dist(z.x, z.y, zt.x, zt.y) || 0.001;
+    const contact = z.radius + zt.radius;
     if (d > contact) {
       const advanceBy = Math.min(z.speed * dt, d - contact);
-      z.x = clamp(z.x + ((p.x - z.x) / d) * advanceBy, z.radius, world.areaW - z.radius);
-      z.y = clamp(z.y + ((p.y - z.y) / d) * advanceBy, z.radius, world.areaH - z.radius);
+      z.x = clamp(z.x + ((zt.x - z.x) / d) * advanceBy, z.radius, world.areaW - z.radius);
+      z.y = clamp(z.y + ((zt.y - z.y) / d) * advanceBy, z.radius, world.areaH - z.radius);
     }
 
     // Tách nhẹ khỏi con khác để đàn zombie dàn thành vòng quanh người chơi
@@ -1084,7 +1207,11 @@ export function advance(world: World, dt: number, input: Input): void {
     }
 
     // Chạm người chơi — đo lại sau khi đã di chuyển
-    if (dist(z.x, z.y, p.x, p.y) <= z.radius + p.radius + 1) {
+    const touchP1 = dist(z.x, z.y, p.x, p.y) <= z.radius + p.radius + 1;
+    const touchP2 = world.player2
+      ? dist(z.x, z.y, world.player2.x, world.player2.y) <= z.radius + world.player2.radius + 1
+      : false;
+    if (touchP1 || touchP2) {
       if (z.kind === 'boomer') {
         // Zombie nổ tự huỷ khi tới sát người chơi
         explode(world, z.x, z.y, 70, 18);
@@ -1095,7 +1222,8 @@ export function advance(world: World, dt: number, input: Input): void {
         continue;
       }
       if (z.attackCd <= 0) {
-        hurtPlayer(world, z.damage);
+        if (touchP1) hurtPlayer(world, z.damage);
+        if (touchP2) hurtPlayer2(world, z.damage);
         z.attackCd = 0.8;
       }
     }
@@ -1106,8 +1234,9 @@ export function advance(world: World, dt: number, input: Input): void {
       z.summonCd = Math.max(0, (z.summonCd ?? 0) - dt);
 
       if (z.shootCd <= 0) {
-        // Bắn nan quạt 3 viên về phía người chơi
-        const base = Math.atan2(p.y - z.y, p.x - z.x);
+        // Bắn nan quạt 3 viên về phía người chơi gần nhất
+        const bossTarget = nearestPlayerTo(world, z.x, z.y);
+        const base = Math.atan2(bossTarget.y - z.y, bossTarget.x - z.x);
         for (let k = -1; k <= 1; k++) {
           world.enemyBullets.push({
             id: world.nextId++,
@@ -1147,6 +1276,9 @@ export function advance(world: World, dt: number, input: Input): void {
     if (dist(b.x, b.y, p.x, p.y) <= p.radius + b.radius) {
       hurtPlayer(world, b.damage);
       world.enemyBullets.splice(i, 1);
+    } else if (world.player2 && dist(b.x, b.y, world.player2.x, world.player2.y) <= world.player2.radius + b.radius) {
+      hurtPlayer2(world, b.damage);
+      world.enemyBullets.splice(i, 1);
     }
   }
 
@@ -1172,6 +1304,10 @@ export function advance(world: World, dt: number, input: Input): void {
     }
     // Vùng nhặt rộng hơn vàng một chút: vật phẩm quý, đừng để trượt
     if (dist(item.x, item.y, p.x, p.y) <= p.radius + 16) {
+      const kind = item.kind;
+      world.powerUps.splice(i, 1);
+      applyPowerUp(world, kind);
+    } else if (world.player2 && dist(item.x, item.y, world.player2.x, world.player2.y) <= world.player2.radius + 16) {
       const kind = item.kind;
       world.powerUps.splice(i, 1);
       applyPowerUp(world, kind);
@@ -1315,6 +1451,7 @@ export interface Frame {
   bombs: number;
   /** Vị trí zombie đang bị khoá mục tiêu, `null` khi sân trống */
   lockedTarget: { x: number; y: number; radius: number } | null;
+  player2?: Player;
 }
 
 export function snapshot(world: World): Frame {
@@ -1353,6 +1490,7 @@ export function snapshot(world: World): Frame {
       const target = world.zombies.find((z) => z.id === world.player.lockedTargetId);
       return target ? { x: target.x, y: target.y, radius: target.radius } : null;
     })(),
+    player2: world.player2 ? { ...world.player2 } : undefined,
   };
 }
 
